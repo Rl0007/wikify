@@ -20,8 +20,8 @@ from wikify.agent.tools import reparse as rep
 from wikify.agent.tools import taxonomy as tax
 from wikify.agent.tools import tree as tt
 from wikify.engine import store
-from wikify.tests import _cleanup
 from wikify.engine.loader.sectionizer import Section
+from wikify.tests import _cleanup
 
 # A 1x1 PNG so `embed_page_image` has a real image File to point at.
 _PNG = (

@@ -58,9 +58,7 @@ class TestSectionTypeDedupe(FrappeTestCase):
 
 		merge_patch()
 		self.assertFalse(frappe.db.exists("Section Type", "t_zzdupe1"))
-		self.assertEqual(
-			frappe.db.get_value("Source Section", sec.name, "section_type"), "zz_dedupe_canon"
-		)
+		self.assertEqual(frappe.db.get_value("Source Section", sec.name, "section_type"), "zz_dedupe_canon")
 		merge_patch()  # idempotent — nothing left to merge
 		self.assertTrue(frappe.db.exists("Section Type", "zz_dedupe_canon"))
 

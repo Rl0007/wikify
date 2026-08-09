@@ -117,10 +117,7 @@ class TestSectionizer(FrappeTestCase):
 	def test_clean_pages_strips_signoff_footer_block(self):
 		# The QMS sign-off footer (a table row with >=2 sign-off phrases) plus its
 		# orphaned |---| separator are page furniture and must be removed.
-		footer = (
-			"|**Prepared by - Dr. A**|**Issued by: QMC**|**Approved by - Dr. B**|\n"
-			"|---|---|---|"
-		)
+		footer = "|**Prepared by - Dr. A**|**Issued by: QMC**|**Approved by - Dr. B**|\n|---|---|---|"
 		pages = [(1, f"## 1. Intro\nreal body\n{footer}"), (2, f"## 2. Next\nmore body\n{footer}")]
 		cleaned = dict(clean_pages(pages))
 		for md in cleaned.values():

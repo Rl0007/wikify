@@ -91,7 +91,8 @@ watch(
 		}
 		tree.value = roots;
 		if (roots.length && !byName.value[selectedName.value]) {
-			const wanted = props.initialSection && nodes[props.initialSection] ? props.initialSection : null;
+			const wanted =
+				props.initialSection && nodes[props.initialSection] ? props.initialSection : null;
 			selectedName.value = wanted || roots[0].name;
 			if (wanted)
 				nextTick(() =>

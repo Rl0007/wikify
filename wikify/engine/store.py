@@ -400,9 +400,7 @@ def get_section_bodies(source_document: str, names: list[str] | None = None) -> 
 	filters: dict = {"source_document": source_document}
 	if names is not None:
 		filters["name"] = ["in", names]
-	return frappe.get_all(
-		"Source Section", filters=filters, fields=["name", "markdown"], order_by="lft asc"
-	)
+	return frappe.get_all("Source Section", filters=filters, fields=["name", "markdown"], order_by="lft asc")
 
 
 def replace_references(

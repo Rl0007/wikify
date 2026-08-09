@@ -27,7 +27,9 @@ class TestFinalizePersistsFurnitureRemoval(FrappeTestCase):
 			sd = parse_pdf(str(path), title="Finalize Test")
 
 		pages = frappe.get_all(
-			"Source Page", filters={"source_document": sd}, fields=["name", "page_no", "baseline_markdown"],
+			"Source Page",
+			filters={"source_document": sd},
+			fields=["name", "page_no", "baseline_markdown"],
 			order_by="page_no asc",
 		)
 		# Seed each page's canonical markdown with furniture wrapping a deterministic body
@@ -47,7 +49,10 @@ class TestFinalizePersistsFurnitureRemoval(FrappeTestCase):
 
 		self.assertEqual(result["pages_changed"], len(pages))
 		canon = frappe.get_all(
-			"Source Page", filters={"source_document": sd}, fields=["canonical_markdown"], order_by="page_no asc"
+			"Source Page",
+			filters={"source_document": sd},
+			fields=["canonical_markdown"],
+			order_by="page_no asc",
 		)
 		for i, row in enumerate(canon, start=1):
 			md = row["canonical_markdown"]

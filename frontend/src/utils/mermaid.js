@@ -47,9 +47,9 @@ function themeConfig() {
  */
 export async function renderMermaidIn(root) {
 	if (!root) return;
-	const blocks = [
-		...root.querySelectorAll("code.language-mermaid, pre.mermaid"),
-	].filter((el) => !el.closest("[data-mermaid-done]"));
+	const blocks = [...root.querySelectorAll("code.language-mermaid, pre.mermaid")].filter(
+		(el) => !el.closest("[data-mermaid-done]")
+	);
 	if (!blocks.length) return;
 
 	let mermaid;
@@ -65,7 +65,10 @@ export async function renderMermaidIn(root) {
 		host.setAttribute("data-mermaid-done", "");
 		try {
 			counter += 1;
-			const { svg } = await mermaid.render(`wikify-mermaid-${counter}`, el.textContent || "");
+			const { svg } = await mermaid.render(
+				`wikify-mermaid-${counter}`,
+				el.textContent || ""
+			);
 			const figure = document.createElement("div");
 			figure.className = "mermaid-figure";
 			figure.setAttribute("data-mermaid-done", "");

@@ -8,7 +8,7 @@ app_license = "mit"
 # Apps
 # ------------------
 
-# required_apps = []
+required_apps = ["wiki"]
 
 # SPA (Frappe UI) mounted at /wikify — served by www/wikify.py + the built
 # www/wikify.html (emitted by the frappe-ui vite plugin's frontendRoute).
@@ -266,4 +266,3 @@ require_type_annotated_api_methods = True
 # ------------
 # List of apps whose translatable strings should be excluded from this app's translations.
 # ignore_translatable_strings_from = []
-

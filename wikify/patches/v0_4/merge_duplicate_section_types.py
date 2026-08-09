@@ -12,9 +12,7 @@ from wikify.wikify.doctype.section_type.section_type import normalize_label
 
 def execute():
 	groups: dict[str, list] = {}
-	for row in frappe.get_all(
-		"Section Type", fields=["name", "label", "creation"], order_by="creation asc"
-	):
+	for row in frappe.get_all("Section Type", fields=["name", "label", "creation"], order_by="creation asc"):
 		key = normalize_label(row.label)
 		if key:
 			groups.setdefault(key, []).append(row)

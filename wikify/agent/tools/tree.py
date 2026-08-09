@@ -277,7 +277,10 @@ TOOLS = [
 			"properties": {
 				"name": {"type": "string", "description": "Source Section id to split."},
 				"at_heading": {"type": "string", "description": "Heading text to split at."},
-				"new_title": {"type": "string", "description": "Title for the new sibling (defaults to the heading text)."},
+				"new_title": {
+					"type": "string",
+					"description": "Title for the new sibling (defaults to the heading text).",
+				},
 			},
 			"required": ["name", "at_heading"],
 		},

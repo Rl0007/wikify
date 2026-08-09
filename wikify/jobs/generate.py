@@ -46,7 +46,9 @@ def run(
 		imp.db_set("completed_at", now_datetime())
 		publish_progress(import_name, 100, "Wiki generated", status="Completed")
 		log(
-			import_name, "info", "generate",
+			import_name,
+			"info",
+			"generate",
 			f"Done — {result['pages']} pages, {result['groups']} groups, "
 			f"{result['deleted']} removed, {result['links']} page-refs linked "
 			f"→ /{result['space_route']}",

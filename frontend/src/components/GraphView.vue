@@ -148,10 +148,15 @@ function setGraph(data) {
 			forceLink(links)
 				.id((d) => d.id)
 				.distance((l) => (l.rel === "REFERENCES" ? 90 : 42))
-				.strength((l) => (l.rel === "REFERENCES" ? Math.min(1, 0.3 + 0.1 * l.weight) : 0.5))
+				.strength((l) =>
+					l.rel === "REFERENCES" ? Math.min(1, 0.3 + 0.1 * l.weight) : 0.5
+				)
 		)
 		.force("charge", forceManyBody().strength(-160))
-		.force("collide", forceCollide().radius((d) => radius(d) + 7))
+		.force(
+			"collide",
+			forceCollide().radius((d) => radius(d) + 7)
+		)
 		// Gentle centering (not forceCenter): keeps disconnected components on-canvas.
 		.force("x", forceX(0).strength(0.06))
 		.force("y", forceY(0).strength(0.06))
@@ -169,7 +174,9 @@ function zoomToFit() {
 	const [x0, x1] = [Math.min(...xs), Math.max(...xs)];
 	const [y0, y1] = [Math.min(...ys), Math.max(...ys)];
 	const k = Math.min(2, 0.9 * Math.min(w / Math.max(1, x1 - x0), h / Math.max(1, y1 - y0)));
-	const t = zoomIdentity.translate(w / 2 - (k * (x0 + x1)) / 2, h / 2 - (k * (y0 + y1)) / 2).scale(k);
+	const t = zoomIdentity
+		.translate(w / 2 - (k * (x0 + x1)) / 2, h / 2 - (k * (y0 + y1)) / 2)
+		.scale(k);
 	select(canvas.value).call(zoomBehavior.transform, t);
 }
 

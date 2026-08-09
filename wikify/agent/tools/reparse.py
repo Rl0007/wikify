@@ -93,10 +93,9 @@ def _use_page_image(ctx: Ctx, args: dict) -> str:
 		embed_page_image(source_document, page_no)
 	except (ValueError, RuntimeError) as e:
 		return _("Couldn't embed the page image: {0}").format(str(e))
-	return (
-		_("Page {0} now embeds its rendered image as canonical markdown (no re-parse).").format(page_no)
-		+ _propagate_page(source_document, page_no)
-	)
+	return _("Page {0} now embeds its rendered image as canonical markdown (no re-parse).").format(
+		page_no
+	) + _propagate_page(source_document, page_no)
 
 
 def _reparse_page(ctx: Ctx, args: dict) -> str:
