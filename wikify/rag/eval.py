@@ -388,12 +388,18 @@ def run_eval(
 	modes: tuple = MODES,
 	question_ids: list | None = None,
 	check_refusals: bool = True,
+	rerank: bool = False,
 ) -> dict:
 	"""Run every golden question down each mode and score it. JSON-serializable throughout.
 
 	`check_refusals` runs the full `answer()` synthesis for the refusal question only — it
 	is the one question that cannot be scored from retrieval alone, and it is also the only
 	one that costs a generation call.
+
+	`rerank` scores the routed leg AS THE PRODUCT SERVES IT. It defaults off because the
+	scorecard's argument is about routing, and an LLM rerank makes every number non-repeatable
+	— but with it off the harness is blind to `search.RERANK_CANDIDATES` and to the reranker's
+	own recall, which is exactly what a retrieval-tuning run has to see.
 	"""
 	project = project or demo_project()
 	sections = corpus_sections(project)
@@ -428,7 +434,7 @@ def run_eval(
 			naive = rag_answer.naive_retrieve(question["question"], project, rag_search.ALL_PROJECTS, limit=k)
 			row["modes"]["naive"] = score_leg(expected, question["required"], naive)
 		if "routed" in modes:
-			routed = rag_answer.retrieve(decided, project, False, rag_search.ALL_PROJECTS, top_k=k)
+			routed = rag_answer.retrieve(decided, project, rerank, rag_search.ALL_PROJECTS, top_k=k)
 			row["modes"]["routed"] = score_leg(expected, question["required"], routed)
 		if check_refusals and question.get("expect_refusal"):
 			synthesised = rag_answer.answer(
@@ -440,6 +446,7 @@ def run_eval(
 	return {
 		"project": project,
 		"k": k,
+		"rerank": rerank,
 		"modes": list(modes),
 		"generated_at": datetime.now().isoformat(timespec="seconds"),
 		"took_ms": int((time.monotonic() - started) * 1000),

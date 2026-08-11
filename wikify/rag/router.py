@@ -33,6 +33,12 @@ from wikify.rag import usage
 # "the second one", not enough to blow up the cheap model's context.
 HISTORY_TURNS = 6
 
+# Routing is the first thing an Ask does and nothing else can start until it lands, so the
+# tail matters more than the median. OpenRouter's default price-weighted routing re-draws a
+# provider per call; pinning the one endpoint is what removes the draw. Same preference the
+# reranker uses (`search.RERANK_PROVIDER`), for the same reason.
+PROVIDER = {"order": ["google-ai-studio"], "allow_fallbacks": True}
+
 FALLBACK_REASON = "Routing is unavailable, so I searched both by meaning and by section type."
 
 
@@ -179,6 +185,7 @@ def route(question: str, project: str | None = None, history: list | None = None
 			build_messages(question, project, history),
 			label="rag_route",
 			response_format={"type": "json_object"},
+			provider=PROVIDER,
 		)
 		content = response["choices"][0]["message"]["content"]
 		usage.add(response.get("usage"))

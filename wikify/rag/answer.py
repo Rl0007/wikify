@@ -193,7 +193,18 @@ def clear_rerank_scores(citations: list[dict]) -> None:
 
 
 def format_context(hits: list) -> str:
-	"""The numbered excerpt block the model cites against — `[n]` is the hit's position."""
+	"""The numbered excerpt block the model cites against — `[n]` is the hit's position.
+
+	Whole sections, not windows around the matched chunk. Windowing is the obvious cost fix
+	and it was measured and rejected: on the six ICAI rate questions of `specs/poc-icai-EVAL.md`,
+	trimming each section to 1,500 chars around its match cut the synthesis prompt 11,002 →
+	3,783 tokens and the spend $0.078 → $0.035 per ask, but dropped the 37% surcharge rate out
+	of G1 and took verified citations 12 → 7. Synthesis is decode-bound (measured: 80% of its
+	wall clock is decode at ~52 tok/s), so the prompt was never buying us speed — only money,
+	and not at the price of a statutory rate.
+	# ponytail: revisit only behind a figure-recall gate over a table-heavy question set, and
+	# with the window sized from the citation quotes rather than a flat character budget.
+	"""
 	blocks = []
 	for position, hit in enumerate(hits, start=1):
 		header = f"[{position}] {rag_search.crumb(hit)} ({rag_search.page_label(hit)})"

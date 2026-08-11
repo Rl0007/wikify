@@ -711,7 +711,7 @@ class TestRagCore(FrappeTestCase):
 			reranked = search.rerank_hits("coin", hits)
 
 		self.assertEqual(chat_completion.call_count, 3)
-		# Sorted, because the batches run concurrently (`search.RERANK_WORKERS`) — what must
+		# Sorted, because the batches run concurrently (`search.RERANK_MAX_WORKERS`) — what must
 		# hold is that they partition the candidate list, not the order they come back in.
 		batches = sorted(candidate_ids(call.args[1]) for call in chat_completion.call_args_list)
 		self.assertEqual(batches, [list(range(0, 10)), list(range(10, 20)), list(range(20, 25))])

@@ -65,9 +65,19 @@ RERANK_BATCH_SIZE = 10
 # batch of latency rather than all of them. What may NOT cross into a pool thread is frappe:
 # `frappe.local` is unbound there, so the OpenRouter key is resolved on the calling thread and
 # each batch's usage is billed on it too (`usage` is thread-local by design — see `rag.usage`).
-# ponytail: fixed pool width, sized for the ~4 batches a 35-candidate rerank produces; make it
-# proportional to the batch count if RERANK_CANDIDATES ever grows past a couple of hundred.
-RERANK_WORKERS = 4
+# The pool is as wide as there are batches, capped: a width below the batch count costs a whole
+# extra wave, which is what a fixed 4 was doing to the 5 batches of a 50-candidate rerank.
+# ponytail: cap measured against 5 batches at ~2.3s each; revisit if RERANK_CANDIDATES grows
+# past a couple of hundred, where the cap starts serialising again and rate limits come in.
+RERANK_MAX_WORKERS = 8
+# OpenRouter's default routing is price-weighted, so parallel batches are independently sampled
+# from a provider distribution and the wall clock is set by the slowest draw. Pinning them to
+# one endpoint is what makes the pool worth having. Measured on PRJ-2026-00002, 50 candidates
+# in 5 batches, 9 runs each: unpinned 7.8s median (1.9x concurrency, 24.7s worst case), pinned
+# 2.6s (4.2x, 4.1s worst case) — and 6 of 18 unpinned runs came back as truncated JSON that
+# lost the whole verdict, against 0 of 18 pinned. `allow_fallbacks` stays on: a reranker that
+# cannot reach its preferred provider must degrade to a slower one, never fail.
+RERANK_PROVIDER = {"order": ["google-ai-studio"], "allow_fallbacks": True}
 
 RESULT_COLUMNS = [
 	"id",
@@ -344,7 +354,12 @@ RERANK_SYSTEM_PROMPT = (
 
 
 def score_batch(
-	query: str, hits: list[Hit], offset: int, model: str, api_key: str = ""
+	query: str,
+	hits: list[Hit],
+	offset: int,
+	model: str,
+	api_key: str = "",
+	provider: dict | None = None,
 ) -> tuple[dict[int, float], dict | None]:
 	"""Score one batch of candidates 0-10, keyed by each one's position in the FULL list.
 
@@ -372,6 +387,7 @@ def score_batch(
 		label="rag_rerank",
 		response_format={"type": "json_object"},
 		api_key=api_key,
+		provider=provider,
 	)
 	parsed = frappe.parse_json(response["choices"][0]["message"]["content"]) or {}
 	scores = {cint(item.get("id")): flt(item.get("score")) for item in parsed.get("scores") or []}
@@ -383,18 +399,23 @@ def rerank_scores(query: str, hits: list[Hit], model: str) -> dict[int, float]:
 	"""Ask the cheap model to score every candidate 0-10 for answering `query`.
 
 	Graded in batches of `RERANK_BATCH_SIZE` — see the constant for the measurement that
-	forced it, and `RERANK_WORKERS` for why the batches run concurrently. The candidate
+	forced it, and `RERANK_MAX_WORKERS` for why the batches run concurrently. The candidate
 	numbers stay global across batches so a score always maps back to the same hit.
 	"""
 	from wikify.engine import settings
 
 	api_key = settings.openrouter_key()
 	offsets = range(0, len(hits), RERANK_BATCH_SIZE)
-	with ThreadPoolExecutor(max_workers=RERANK_WORKERS) as pool:
+	with ThreadPoolExecutor(max_workers=min(len(offsets), RERANK_MAX_WORKERS)) as pool:
 		batches = list(
 			pool.map(
 				lambda offset: score_batch(
-					query, hits[offset : offset + RERANK_BATCH_SIZE], offset, model, api_key
+					query,
+					hits[offset : offset + RERANK_BATCH_SIZE],
+					offset,
+					model,
+					api_key,
+					RERANK_PROVIDER,
 				),
 				offsets,
 			)
