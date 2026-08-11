@@ -43,7 +43,7 @@ def semantic_search(ctx: Ctx, args: dict) -> str:
 		return _("Provide a `query` to search for.")
 	result = search(
 		query,
-		project=args.get("project") or ctx.project,
+		project=ctx.default_project(args.get("project")),
 		source_document=ctx.default_document(args.get("source_document")),
 		section_type=args.get("section_type"),
 		limit=args.get("limit") or 8,

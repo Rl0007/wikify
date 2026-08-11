@@ -320,3 +320,127 @@ class TestAgent(FrappeTestCase):
 		frappe.db.set_value("Wikify Agent Session", created["session_id"], "title", "My chat")
 		listed = agent_api.list_sessions()
 		self.assertTrue(any(s["name"] == created["session_id"] for s in listed))
+
+
+class TestSearchSectionsRecall(FrappeTestCase):
+	"""`search_sections` must never let a `query` hint look like an empty section type.
+
+	Live regression: asked "How many job descriptions are in the Demo Corpus project?" the
+	agent reasoned its way to the right type, searched with query="job descriptions", got
+	"No sections of type X match", and told the user there were none — while 15 sections
+	sat under titles reading "Job Description — …".
+	"""
+
+	def setUp(self):
+		self.sd = frappe.get_doc({"doctype": "Source Document", "title": "Recall Test"}).insert(
+			ignore_permissions=True
+		)
+		self.addCleanup(_cleanup.delete_document, self.sd.name)
+		_cleanup.register_session_sweep(self)
+		self.section_type = self._make_type(
+			label=f"Staff Roles {frappe.generate_hash(length=6)}",
+			description="Job descriptions and role profiles — one section per post.",
+		)
+		titles = [
+			"Job Description — Ward Sister",
+			"Job Description — Staff Nurse (Band 5)",
+			"Job Description — Healthcare Assistant",
+		]
+		store.replace_sections(
+			self.sd.name,
+			[_sec("Roles and Responsibilities", 1, ["Roles and Responsibilities"], 1, 1)]
+			+ [
+				_sec(title, 2, ["Roles and Responsibilities", title], page, page)
+				for page, title in enumerate(titles, start=2)
+			],
+		)
+		for row in frappe.get_all(
+			"Source Section", filters={"source_document": self.sd.name, "level": 2}, pluck="name"
+		):
+			frappe.db.set_value("Source Section", row, "section_type", self.section_type.type_name)
+
+	def _make_type(self, **kwargs):
+		type_name = f"t_{frappe.generate_hash(length=6)}"
+		kwargs.setdefault("label", f"Test Type {type_name}")
+		doc = frappe.get_doc({"doctype": "Section Type", "type_name": type_name, **kwargs}).insert(
+			ignore_permissions=True
+		)
+		# The loop test commits mid-turn, so a plain delete would be rolled back with it.
+		self.addCleanup(_cleanup.delete_section_type, type_name)
+		return doc
+
+	def _search(self, **args):
+		return _search_sections(Ctx(session="x", user="Administrator"), args)
+
+	def test_plural_query_matches_singular_titles(self):
+		"""The exact failing shape: the user's plural wording vs singular stored titles."""
+		out = self._search(section_type=self.section_type.type_name, query="job descriptions")
+		self.assertIn("Ward Sister", out)
+		self.assertIn("Staff Nurse", out)
+		self.assertIn("Healthcare Assistant", out)
+		self.assertNotIn("no sections", out.lower())
+
+	def test_unmatched_query_returns_everything_and_says_so(self):
+		out = self._search(section_type=self.section_type.type_name, query="aardvark husbandry")
+		self.assertIn("IGNORED", out)
+		self.assertIn("3 section(s)", out)
+		self.assertIn("Ward Sister", out)
+
+	def test_empty_type_reads_as_empty_not_as_a_filter_miss(self):
+		empty_type = self._make_type()
+		out = self._search(section_type=empty_type.type_name, source_document=self.sd.name)
+		self.assertIn("no sections in", out)
+		self.assertIn(self.section_type.type_name, out)  # names the types that do have content
+
+	def test_project_title_resolves_to_its_id(self):
+		"""The live failure: the user says "the Demo Corpus project" and the model passes
+		that title, which used to scope the query to zero documents."""
+		project = frappe.get_doc(
+			{"doctype": "Wikify Project", "project_name": f"Recall Corpus {frappe.generate_hash(length=6)}"}
+		).insert(ignore_permissions=True)
+		self.addCleanup(_cleanup.delete_project, project.name)
+		frappe.db.set_value("Source Document", self.sd.name, "project", project.name)
+
+		out = self._search(section_type=self.section_type.type_name, project=project.project_name)
+		self.assertIn(project.name, out)
+		self.assertIn("Ward Sister", out)
+
+	def test_unresolvable_project_says_the_scope_was_dropped(self):
+		out = self._search(section_type=self.section_type.type_name, project="No Such Corpus")
+		self.assertIn("matches no project", out)
+		self.assertIn("Ward Sister", out)
+
+	def test_unknown_type_names_near_matches(self):
+		out = self._search(section_type="job_description")
+		self.assertIn("not a Section Type", out)
+		self.assertIn(self.section_type.type_name, out)
+
+	def test_agent_loop_sees_the_count_for_the_failing_question(self):
+		"""End to end through the loop: the tool message the model reads must carry the count."""
+		sess = session.get_or_create(None, user="Administrator", scope="global")
+		session.append_message(
+			sess.name, "user", "How many job descriptions are in this project?", status="done"
+		)
+		session.set_running(sess.name, True)
+		fake = FakeLLM(
+			[
+				[
+					_tool_chunk(
+						0,
+						"call_1",
+						"search_sections",
+						'{"section_type": "%s", "query": "job descriptions"}' % self.section_type.type_name,
+					)
+				],
+				[_text_chunk("There are 3 job descriptions.")],
+			]
+		)
+		with patch("wikify.agent.llm.complete_with_tools", fake):
+			AgentRunner(sess.name, "Administrator").run()
+		tool_result = frappe.get_all(
+			"Wikify Agent Message",
+			filters={"session": sess.name, "role": "tool"},
+			pluck="content",
+		)[0]
+		self.assertIn("3 of 3 section(s)", tool_result)
+		self.assertIn("Ward Sister", tool_result)

@@ -46,6 +46,20 @@ class Ctx:
 			return explicit
 		return self.source_document
 
+	def default_project(self, explicit: str | None = None) -> str | None:
+		"""A tool's `project` arg, resolved from a display name, falling back to the scope.
+
+		Same failure `default_document` guards, one field over: the user says "the Demo
+		Corpus project" and the model passes that title, but the id is `PRJ-2026-00003`.
+		An unresolved title scoped the query to zero documents, which the model then read
+		as "this content does not exist".
+		"""
+		if not explicit:
+			return self.project
+		if frappe.db.exists("Wikify Project", explicit):
+			return explicit
+		return frappe.db.get_value("Wikify Project", {"project_name": explicit}, "name") or self.project
+
 	def default_import(self, explicit: str | None = None) -> str | None:
 		"""The Wikify Import owning the (resolved) document — needed by pipeline jobs.
 

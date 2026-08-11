@@ -66,6 +66,12 @@ def delete_project(name: str) -> None:
 	_finalized(lambda: frappe.db.delete("Wikify Project", {"name": name}))
 
 
+def delete_section_type(type_name: str) -> None:
+	"""Section Type labels are identity — a leaked test type pollutes the real taxonomy,
+	and the agent then offers it to users as a near match."""
+	_finalized(lambda: frappe.db.delete("Section Type", {"name": type_name}))
+
+
 def register_session_sweep(testcase) -> None:
 	"""Snapshot the session table now; at cleanup, delete any sessions created since.
 

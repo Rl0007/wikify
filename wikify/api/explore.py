@@ -14,7 +14,7 @@ from __future__ import annotations
 import frappe
 from frappe.query_builder.functions import Count
 
-_UNTAGGED = "__untagged__"  # sentinel for sections classification hasn't reached yet
+UNTAGGED = "__untagged__"  # sentinel for sections classification hasn't reached yet
 
 
 def _scope(source_document: str | None) -> dict:
@@ -46,7 +46,7 @@ def _counts(scope: list | None) -> dict[str, int]:
 		column = getattr(table, field)
 		query = query.where(column.isin(value) if op == "in" else column == value)
 	rows = query.run(as_dict=True)
-	return {r["section_type"] or _UNTAGGED: r["count"] for r in rows}
+	return {r["section_type"] or UNTAGGED: r["count"] for r in rows}
 
 
 @frappe.whitelist()
@@ -79,14 +79,14 @@ def type_summary(source_document: str | None = None, project: str | None = None)
 		}
 		for t in types
 	]
-	if counts.get(_UNTAGGED):
+	if counts.get(UNTAGGED):
 		summary.append(
 			{
-				"type_name": _UNTAGGED,
+				"type_name": UNTAGGED,
 				"label": "Untagged",
 				"color": "#cbd5e1",
 				"is_other": 0,
-				"count": counts[_UNTAGGED],
+				"count": counts[UNTAGGED],
 			}
 		)
 	return summary
@@ -103,7 +103,7 @@ def sections_by_type(
 	single document (`source_document`) or a project (`project`), else spans all docs.
 	"""
 	filters = _scope(source_document)
-	filters["section_type"] = ["is", "not set"] if section_type == _UNTAGGED else section_type
+	filters["section_type"] = ["is", "not set"] if section_type == UNTAGGED else section_type
 
 	if not source_document:
 		doc_scope = _docs_in_project(project)

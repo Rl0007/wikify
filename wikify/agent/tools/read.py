@@ -7,6 +7,9 @@ attached document (`ctx.default_document`) so the user rarely names ids.
 
 from __future__ import annotations
 
+import re
+from difflib import get_close_matches
+
 import frappe
 from frappe import _
 
@@ -15,6 +18,7 @@ from wikify.agent.registry import Tool
 
 # Keep tool results bounded — the model can ask for a narrower slice if it needs more.
 _BODY_LIMIT = 6000
+_WORD_SEPARATOR = re.compile(r"[^a-z0-9]+")
 
 
 def _truncate(text: str) -> str:
@@ -129,48 +133,146 @@ def _list_section_types(ctx: Ctx, args: dict) -> str:
 	return "\n".join(lines)
 
 
+def search_terms(text: str) -> list[str]:
+	"""Lowercase alphanumeric tokens with a trailing plural `s` dropped.
+
+	Applied to BOTH sides of the comparison, so the way a user asks ("job descriptions")
+	still matches the way titles are stored ("Job Description — Staff Nurse").
+	"""
+	# ponytail: only the trailing-`s` plural is folded, reach for a real stemmer if
+	# `-ies`/`-es` mismatches start costing recall
+	terms = []
+	for token in _WORD_SEPARATOR.split((text or "").lower()):
+		if token:
+			terms.append(token[:-1] if len(token) > 3 and token.endswith("s") else token)
+	return terms
+
+
+def matches_terms(section: dict, terms: list[str]) -> bool:
+	"""True when every query term appears in the section's path/title (normalised)."""
+	haystack = " ".join(search_terms(f"{section.get('hierarchy_path') or ''} {section.get('title') or ''}"))
+	return all(term in haystack for term in terms)
+
+
+def format_section_groups(groups: list[dict]) -> str:
+	lines: list[str] = []
+	for group in groups:
+		lines.append(f"# {group['doc_title']} ({group['source_document']})")
+		for section in group["sections"]:
+			pages = f" [p.{section['page_start']}-{section['page_end']}]" if section.get("page_start") else ""
+			lines.append(f"  - {section['hierarchy_path'] or section['title']}{pages} <{section['name']}>")
+	return "\n".join(lines)
+
+
+def describe_scope(project: str | None, source_document: str | None) -> str:
+	if source_document:
+		return _("document {0}").format(source_document)
+	if project:
+		return _("project {0}").format(project)
+	return _("any project")
+
+
+def unknown_type_hint(section_type: str) -> str:
+	"""Message for a `section_type` that is not in the taxonomy, with the near matches.
+
+	Distinguishing this from "the type exists but is empty" is the whole point: a model
+	that guesses `job_description` must learn the key is wrong, not that the content is
+	missing.
+	"""
+	known = frappe.get_all("Section Type", fields=["type_name", "label", "description"])
+	terms = search_terms(section_type)
+	scored = []
+	for row in known:
+		haystack = " ".join(search_terms(f"{row.type_name} {row.label or ''} {row.description or ''}"))
+		hits = sum(1 for term in terms if term in haystack)
+		if hits:
+			scored.append((hits, row.type_name))
+	names = [row.type_name for row in known]
+	near = [entry[1] for entry in sorted(scored, reverse=True)] or get_close_matches(
+		section_type, names, n=5, cutoff=0.4
+	)
+	if near:
+		return _(
+			"'{0}' is not a Section Type in this taxonomy — so this is NOT evidence that the "
+			"content is missing. Closest existing types: {1}. Retry with one of those, or call "
+			"list_section_types for the full taxonomy."
+		).format(section_type, ", ".join(near[:5]))
+	return _(
+		"'{0}' is not a Section Type in this taxonomy — this says nothing about whether the "
+		"content exists. Call list_section_types and retry with a real type."
+	).format(section_type)
+
+
 def _search_sections(ctx: Ctx, args: dict) -> str:
 	"""Explore-style cross-document lookup, reusing `api.explore.sections_by_type`.
 
 	With `section_type`, returns the matching sections grouped by document (optionally
-	scoped to `project` / the attached `source_document`, and filtered by a `query`
-	substring on title/path). Without a type, lists the taxonomy counts so the model can
-	pick a type to drill into.
+	scoped to `project` / the attached `source_document`). Without a type, lists the
+	taxonomy counts so the model can pick a type to drill into.
+
+	`query` is a NARROWING HINT, not a hard filter: when it matches nothing the full set
+	is returned with a note. The tool's contract is "find me the sections" — silently
+	returning nothing because the user's wording differs from the stored titles reads to
+	the model as "that type is empty" and it then states that as fact.
 	"""
-	from wikify.api.explore import sections_by_type, type_summary
+	from wikify.api.explore import UNTAGGED, sections_by_type, type_summary
 
 	section_type = args.get("section_type")
-	project = args.get("project") or ctx.project
+	requested_project = args.get("project")
+	project = ctx.default_project(requested_project)
 	source_document = ctx.default_document(args.get("source_document"))
-	query = (args.get("query") or "").strip().lower()
+	query = (args.get("query") or "").strip()
+	scope = describe_scope(project, source_document)
+	if requested_project and not project:
+		scope = _("{0} ('{1}' matches no project, so the search was NOT scoped to it)").format(
+			scope, requested_project
+		)
 
 	if not section_type:
 		summary = type_summary(source_document=source_document, project=project)
 		lines = ["Available section types (pass `section_type` to drill in):"]
 		lines += [f"- {s['type_name']}: {s['count']}" for s in summary if s["count"]]
-		return "\n".join(lines) if len(lines) > 1 else _("No tagged sections in this scope yet.")
+		if len(lines) == 1:
+			return _("No tagged sections in {0} yet.").format(scope)
+		return "\n".join(lines)
+
+	if section_type != UNTAGGED and not frappe.db.exists("Section Type", section_type):
+		return unknown_type_hint(section_type)
 
 	groups = sections_by_type(section_type, source_document=source_document, project=project)
-	lines: list[str] = []
-	total = 0
-	for g in groups:
-		secs = g["sections"]
-		if query:
-			secs = [
-				s
-				for s in secs
-				if query in (s.get("title") or "").lower() or query in (s.get("hierarchy_path") or "").lower()
-			]
-		if not secs:
-			continue
-		lines.append(f"# {g['doc_title']} ({g['source_document']})")
-		for s in secs:
-			pages = f" [p.{s['page_start']}-{s['page_end']}]" if s.get("page_start") else ""
-			lines.append(f"  - {s['hierarchy_path'] or s['title']}{pages} <{s['name']}>")
-			total += 1
-	if not lines:
-		return _("No sections of type {0} match.").format(section_type)
-	return f"{total} section(s) of type {section_type}:\n" + "\n".join(lines)
+	available = sum(len(group["sections"]) for group in groups)
+	if not available:
+		summary = type_summary(source_document=source_document, project=project)
+		populated = ", ".join(f"{s['type_name']}: {s['count']}" for s in summary if s["count"])
+		message = _("'{0}' exists in the taxonomy but has no sections in {1}.").format(section_type, scope)
+		return f"{message} " + (
+			_("Types that do have sections here: {0}.").format(populated)
+			if populated
+			else _("No section in this scope carries any type yet.")
+		)
+
+	if not query:
+		header = _("{0} section(s) of type {1} in {2}:").format(available, section_type, scope)
+		return f"{header}\n{format_section_groups(groups)}"
+
+	terms = search_terms(query)
+	narrowed = [
+		{**group, "sections": [row for row in group["sections"] if matches_terms(row, terms)]}
+		for group in groups
+	]
+	narrowed = [group for group in narrowed if group["sections"]]
+	matched = sum(len(group["sections"]) for group in narrowed)
+	if not matched:
+		header = _(
+			"Type {0} has {1} section(s) in {2}, but none of their titles or paths contain "
+			'"{3}" — the query filter was IGNORED (it is a hint, not proof of absence). '
+			"All {1} are listed below:"
+		).format(section_type, available, scope, query)
+		return f"{header}\n{format_section_groups(groups)}"
+	header = _('{0} of {1} section(s) of type {2} in {3} match "{4}":').format(
+		matched, available, section_type, scope, query
+	)
+	return f"{header}\n{format_section_groups(narrowed)}"
 
 
 def _read_rendered_preview(ctx: Ctx, args: dict) -> str:
@@ -325,14 +427,22 @@ TOOLS = [
 		side="server",
 		description=(
 			"Find sections across documents by Section Type (Explore-style). Optionally scope "
-			"to a project or the attached document, and filter by a title/path substring. "
-			"Omit section_type to list the available types with counts."
+			"to a project or the attached document, and narrow with a title/path `query`. "
+			"Omit section_type to list the available types with counts. The reply always "
+			"states how many sections the type has in scope — read that count before "
+			"concluding anything is absent."
 		),
 		parameters={
 			"type": "object",
 			"properties": {
 				"section_type": {"type": "string", "description": "Section Type to filter by."},
-				"query": {"type": "string", "description": "Optional substring filter on title/path."},
+				"query": {
+					"type": "string",
+					"description": (
+						"Optional narrowing hint matched against title/path. It never hides the "
+						"type's sections — when it matches none, all of them are returned."
+					),
+				},
 				"project": {"type": "string", "description": "Optional Wikify Project to scope to."},
 				"source_document": {"type": "string", "description": "Optional single-document scope."},
 			},
