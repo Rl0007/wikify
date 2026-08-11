@@ -1,0 +1,19 @@
+{
+	"private": true,
+	"name": "wikify",
+	"description": "PDFs to Frappe Wiki Spaces/Documents",
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/bwhtech/wikify.git"
+	},
+	"author": "BWH",
+	"license": "MIT",
+	"bugs": {
+		"url": "https://github.com/bwhtech/wikify/issues"
+	},
+	"scripts": {
+		"postinstall": "cd frontend && yarn install",
+		"dev": "cd frontend && yarn dev",
+		"build": "cd frontend && yarn build"
+	}
+}

@@ -37,9 +37,9 @@ class TestWikiGenerate(FrappeTestCase):
 		# rolled back with the test transaction — use a unique route per test and clean
 		# up the generated spaces + this doc's sections explicitly in tearDown.
 		self._spaces: set[str] = set()
-		self.sd = frappe.get_doc(
-			{"doctype": "Source Document", "title": "Gen Test", "page_count": 5}
-		).insert(ignore_permissions=True)
+		self.sd = frappe.get_doc({"doctype": "Source Document", "title": "Gen Test", "page_count": 5}).insert(
+			ignore_permissions=True
+		)
 		# Intro (group, p1-3) > Purpose (p1), Scope (p2, refers to page 5);
 		# Appendix (leaf, p4-5).
 		store.replace_sections(
@@ -48,7 +48,11 @@ class TestWikiGenerate(FrappeTestCase):
 				_sec("1. Intro", 1, ["1. Intro"], 1, 3, "overview"),
 				_sec("1.1 Purpose", 2, ["1. Intro", "1.1 Purpose"], 1, 1),
 				_sec(
-					"1.2 Scope", 2, ["1. Intro", "1.2 Scope"], 2, 2,
+					"1.2 Scope",
+					2,
+					["1. Intro", "1.2 Scope"],
+					2,
+					2,
 					"In scope. See page 5 for details. Williams p820 is external.",
 				),
 				_sec("2. Appendix", 1, ["2. Appendix"], 4, 5, "appendix body"),
@@ -62,7 +66,12 @@ class TestWikiGenerate(FrappeTestCase):
 			if root:
 				names = frappe.get_all(
 					"Wiki Document",
-					filters={"name": ["in", [root, *get_descendants_of("Wiki Document", root, ignore_permissions=True)]]},
+					filters={
+						"name": [
+							"in",
+							[root, *get_descendants_of("Wiki Document", root, ignore_permissions=True)],
+						]
+					},
 					order_by="lft desc",
 					pluck="name",
 				)
@@ -89,8 +98,14 @@ class TestWikiGenerate(FrappeTestCase):
 				"Wiki Document",
 				filters={"name": ["in", names]},
 				fields=[
-					"name", "title", "is_group", "route", "content",
-					"parent_wiki_document", "sort_order", "is_published",
+					"name",
+					"title",
+					"is_group",
+					"route",
+					"content",
+					"parent_wiki_document",
+					"sort_order",
+					"is_published",
 				],
 			)
 		}
@@ -168,19 +183,25 @@ class TestWikiGenerate(FrappeTestCase):
 
 	def test_regenerate_updates_in_place(self):
 		res1 = self._generate()
-		first_purpose = frappe.db.get_value("Source Section", {"title": "1.1 Purpose", "source_document": self.sd.name}, "wiki_document")
+		first_purpose = frappe.db.get_value(
+			"Source Section", {"title": "1.1 Purpose", "source_document": self.sd.name}, "wiki_document"
+		)
 		count1 = len(self._docs_under(res1["root_group"]))
 
 		# Regenerate unchanged → same wiki doc reused, no duplicates.
 		res2 = generate_wiki(self.sd.name, wiki_space=res1["space"])
 		self.assertEqual(res1["root_group"], res2["root_group"])
-		again_purpose = frappe.db.get_value("Source Section", {"title": "1.1 Purpose", "source_document": self.sd.name}, "wiki_document")
+		again_purpose = frappe.db.get_value(
+			"Source Section", {"title": "1.1 Purpose", "source_document": self.sd.name}, "wiki_document"
+		)
 		self.assertEqual(first_purpose, again_purpose)
 		self.assertEqual(len(self._docs_under(res2["root_group"])), count1)
 
 	def test_regenerate_drops_excluded_section(self):
 		res1 = self._generate()
-		appendix = frappe.db.get_value("Source Section", {"title": "2. Appendix", "source_document": self.sd.name}, "name")
+		appendix = frappe.db.get_value(
+			"Source Section", {"title": "2. Appendix", "source_document": self.sd.name}, "name"
+		)
 		appendix_wiki = frappe.db.get_value("Source Section", appendix, "wiki_document")
 		self.assertTrue(frappe.db.exists("Wiki Document", appendix_wiki))
 
@@ -194,7 +215,9 @@ class TestWikiGenerate(FrappeTestCase):
 
 	def test_regenerate_after_rename_updates_route(self):
 		res1 = self._generate()
-		purpose = frappe.db.get_value("Source Section", {"title": "1.1 Purpose", "source_document": self.sd.name}, "name")
+		purpose = frappe.db.get_value(
+			"Source Section", {"title": "1.1 Purpose", "source_document": self.sd.name}, "name"
+		)
 		frappe.db.set_value("Source Section", purpose, "title", "1.1 Goals")
 		res2 = generate_wiki(self.sd.name, wiki_space=res1["space"])
 		docs = self._by_title(res2["root_group"])

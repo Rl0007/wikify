@@ -158,7 +158,9 @@ class Fixture:
 			frappe.db.delete("Wiki Space", {"name": self.space})
 		imports = frappe.get_all("Wikify Import", filters={"source_document": self.sd}, pluck="name")
 		if imports:
-			frappe.db.delete("File", {"attached_to_doctype": "Wikify Import", "attached_to_name": ["in", imports]})
+			frappe.db.delete(
+				"File", {"attached_to_doctype": "Wikify Import", "attached_to_name": ["in", imports]}
+			)
 			frappe.db.delete("Wikify Import", {"name": ["in", imports]})
 		frappe.db.delete("Source Section", {"source_document": self.sd})
 		frappe.db.delete("Source Page", {"source_document": self.sd})
@@ -198,7 +200,9 @@ def run_turn(fixture: Fixture, prompt: str, approved_tools: list | None = None) 
 	}
 
 
-_SUCCESS_CLAIM = re.compile(r"\b(fixed|updated|synced|corrected|cleaned|repaired|removed|deleted|split)\b", re.I)
+_SUCCESS_CLAIM = re.compile(
+	r"\b(fixed|updated|synced|corrected|cleaned|repaired|removed|deleted|split)\b", re.I
+)
 
 
 def honesty_check(turn: dict, before: dict, after: dict) -> tuple[bool, str]:
@@ -232,7 +236,11 @@ def run_scenarios(which: str = "all", *, keep: bool = False) -> dict:
 		try:
 			result = sc.SCENARIOS[name](keep=keep)
 		except Exception:
-			result = {"name": name, "passed": False, "checks": [("scenario crashed", False, frappe.get_traceback())]}
+			result = {
+				"name": name,
+				"passed": False,
+				"checks": [("scenario crashed", False, frappe.get_traceback())],
+			}
 		if not keep:
 			leaked_types = set(frappe.get_all("Section Type", pluck="name")) - types_before
 			if leaked_types:

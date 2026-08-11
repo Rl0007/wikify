@@ -46,9 +46,7 @@ def _delete_document_rows(sd_name: str) -> None:
 		frappe.db.delete("Wikify Import", {"name": ("in", imports)})
 	pages = frappe.get_all("Source Page", filters={"source_document": sd_name}, pluck="name")
 	if pages:
-		frappe.db.delete(
-			"File", {"attached_to_doctype": "Source Page", "attached_to_name": ("in", pages)}
-		)
+		frappe.db.delete("File", {"attached_to_doctype": "Source Page", "attached_to_name": ("in", pages)})
 		frappe.db.delete("Source Page", {"name": ("in", pages)})
 	frappe.db.delete("Section Reference", {"source_document": sd_name})
 	frappe.db.delete("Source Section", {"source_document": sd_name})

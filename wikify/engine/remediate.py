@@ -112,7 +112,9 @@ def remediate_pdf(
 			candidates: list[tuple] = []  # (method, markdown, PageScore, adopt_eligible)
 			errors: list[str] = []
 			try:
-				vlm_md = vlm.parse_page_image(data_url, project_context=project_context, instruction=instruction)
+				vlm_md = vlm.parse_page_image(
+					data_url, project_context=project_context, instruction=instruction
+				)
 				vlm_ps = score_page(
 					p["page_no"], vlm_md, gt, image_data_url=img, use_judge=use_judge, page_kind=kind
 				)
@@ -121,7 +123,9 @@ def remediate_pdf(
 				errors.append(f"vlm failed: {e}")
 			if kind != "visual":
 				try:
-					clean_md = clean_markdown(base_md, project_context=project_context, instruction=instruction)
+					clean_md = clean_markdown(
+						base_md, project_context=project_context, instruction=instruction
+					)
 					clean_ps = score_page(
 						p["page_no"], clean_md, gt, image_data_url=img, use_judge=use_judge, page_kind=kind
 					)
@@ -137,8 +141,10 @@ def remediate_pdf(
 			winner = _pick_winner(candidates)
 			# Record the adopted candidate; when nothing is adopted, record the vlm attempt
 			# (the expensive audit trail) so the review UI shows what was tried and why not.
-			record = winner or next((c for c in candidates if c[0] == "vlm"), None) or (
-				candidates[0] if candidates else None
+			record = (
+				winner
+				or next((c for c in candidates if c[0] == "vlm"), None)
+				or (candidates[0] if candidates else None)
 			)
 			if record:
 				method, new_md, new_ps, _ = record

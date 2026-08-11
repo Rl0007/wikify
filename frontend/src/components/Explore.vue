@@ -27,7 +27,10 @@ function loadSummary() {
 }
 function loadResults() {
 	if (props.sourceDocument && selectedType.value) {
-		results.submit({ section_type: selectedType.value, source_document: props.sourceDocument });
+		results.submit({
+			section_type: selectedType.value,
+			source_document: props.sourceDocument,
+		});
 	}
 }
 

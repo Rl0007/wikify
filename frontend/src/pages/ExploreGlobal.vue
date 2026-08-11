@@ -35,7 +35,7 @@ const matchCount = computed(() => (groups.data || []).reduce((n, g) => n + g.sec
 
 const selectedType = ref(null);
 const selected = computed(
-	() => types.value.find((t) => t.type_name === selectedType.value) || null,
+	() => types.value.find((t) => t.type_name === selectedType.value) || null
 );
 
 // Re-pull the type summary whenever the project scope changes; the selected-type watcher

@@ -43,9 +43,21 @@ const newKey = ref("");
 
 const MODEL_FIELDS = [
 	{ key: "agent_model", label: "Agent model", hint: "Assistant model (projects can override)." },
-	{ key: "vlm_model", label: "VLM model", hint: "Vision model for re-parsing flagged / visual pages." },
-	{ key: "cleanup_model", label: "Cleanup model", hint: "Cheap text model for the markdown cleanup pass." },
-	{ key: "judge_model", label: "Judge model", hint: "Independent grader — keep distinct from the parser." },
+	{
+		key: "vlm_model",
+		label: "VLM model",
+		hint: "Vision model for re-parsing flagged / visual pages.",
+	},
+	{
+		key: "cleanup_model",
+		label: "Cleanup model",
+		hint: "Cheap text model for the markdown cleanup pass.",
+	},
+	{
+		key: "judge_model",
+		label: "Judge model",
+		hint: "Independent grader — keep distinct from the parser.",
+	},
 	{ key: "classifier_model", label: "Classifier model", hint: "" },
 ];
 
@@ -108,7 +120,10 @@ const activeTab = ref(TABS[0].value);
 			<SettingsNavGroup label="Wikify">
 				<SettingsNavItem v-for="tab in TABS" :key="tab.value" :value="tab.value">
 					<template #prefix>
-						<span :class="[tab.icon, 'size-4 shrink-0 text-ink-gray-6']" aria-hidden="true" />
+						<span
+							:class="[tab.icon, 'size-4 shrink-0 text-ink-gray-6']"
+							aria-hidden="true"
+						/>
 					</template>
 					{{ tab.label }}
 				</SettingsNavItem>
@@ -138,14 +153,17 @@ const activeTab = ref(TABS[0].value);
 						:placeholder="keyIsSet ? '•••• key saved — type to replace' : 'sk-or-v1-…'"
 					/>
 					<p class="mt-1.5 text-p-sm text-ink-gray-5">
-						Used for all AI steps. Stored encrypted. Leave blank to keep the current key;
-						falls back to site config / the app .env when never set.
+						Used for all AI steps. Stored encrypted. Leave blank to keep the current
+						key; falls back to site config / the app .env when never set.
 					</p>
 				</SettingsBody>
 			</SettingsPanel>
 
 			<SettingsPanel value="models">
-				<SettingsHeader title="Models" description="OpenRouter model ids per pipeline step.">
+				<SettingsHeader
+					title="Models"
+					description="OpenRouter model ids per pipeline step."
+				>
 					<template #actions>
 						<Button
 							variant="solid"
@@ -167,14 +185,19 @@ const activeTab = ref(TABS[0].value);
 								type="text"
 								placeholder="e.g. anthropic/claude-sonnet-4.6"
 							/>
-							<p v-if="f.hint" class="mt-1.5 text-p-sm text-ink-gray-5">{{ f.hint }}</p>
+							<p v-if="f.hint" class="mt-1.5 text-p-sm text-ink-gray-5">
+								{{ f.hint }}
+							</p>
 						</div>
 					</div>
 				</SettingsBody>
 			</SettingsPanel>
 
 			<SettingsPanel value="scoring">
-				<SettingsHeader title="Scoring & thresholds" description="Judge gates and parse tuning.">
+				<SettingsHeader
+					title="Scoring & thresholds"
+					description="Judge gates and parse tuning."
+				>
 					<template #actions>
 						<Button
 							variant="solid"
@@ -196,7 +219,12 @@ const activeTab = ref(TABS[0].value);
 							<Switch v-model="form.judge_all_pages" />
 						</SettingsRow>
 						<SettingsRow v-for="f in FLOAT_FIELDS" :key="f.key" :title="f.label">
-							<FormControl v-model="form[f.key]" type="number" step="0.001" class="w-28" />
+							<FormControl
+								v-model="form[f.key]"
+								type="number"
+								step="0.001"
+								class="w-28"
+							/>
 						</SettingsRow>
 						<SettingsRow v-for="f in INT_FIELDS" :key="f.key" :title="f.label">
 							<FormControl v-model="form[f.key]" type="number" class="w-28" />

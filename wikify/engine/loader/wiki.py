@@ -19,9 +19,7 @@ from collections.abc import Callable
 
 _SLUG_RE = re.compile(r"[^a-z0-9]+")
 # Optional see/refer cue, the word page/pg/p (with optional "no"), then the number.
-_PAGEREF_RE = re.compile(
-	r"((?:see|refer(?:\s+to)?)\s+)?(page\s*no\.?|page|pg\.?|p\.)\s*(\d{1,4})\b", re.I
-)
+_PAGEREF_RE = re.compile(r"((?:see|refer(?:\s+to)?)\s+)?(page\s*no\.?|page|pg\.?|p\.)\s*(\d{1,4})\b", re.I)
 
 
 def slugify(text: str) -> str:

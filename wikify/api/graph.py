@@ -15,9 +15,7 @@ from frappe import _
 
 def _document_graph(source_document: str) -> tuple[list[dict], list[dict]]:
 	"""(nodes, edges) for one Source Document — shared by both scopes."""
-	sd = frappe.db.get_value(
-		"Source Document", source_document, ["title", "page_count"], as_dict=True
-	)
+	sd = frappe.db.get_value("Source Document", source_document, ["title", "page_count"], as_dict=True)
 	if not sd:
 		frappe.throw(_("Source Document {0} not found.").format(source_document))
 	sections = frappe.get_all(

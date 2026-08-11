@@ -52,9 +52,19 @@ class TestSectionSurgery(FrappeTestCase):
 				"Source Section",
 				filters={"source_document": self.sd.name},
 				fields=[
-					"name", "title", "markdown", "lft", "rgt", "level",
-					"parent_source_section", "is_group", "hierarchy_path", "sort_order",
-					"page_start", "page_end", "include_in_wiki",
+					"name",
+					"title",
+					"markdown",
+					"lft",
+					"rgt",
+					"level",
+					"parent_source_section",
+					"is_group",
+					"hierarchy_path",
+					"sort_order",
+					"page_start",
+					"page_end",
+					"include_in_wiki",
 				],
 			)
 		}

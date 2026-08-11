@@ -62,7 +62,7 @@ watch(
 	(key) => {
 		const i = tabKeys.indexOf(key);
 		if (i >= 0 && i !== activeTab.value) activeTab.value = i;
-	},
+	}
 );
 
 // Streaming log
@@ -88,7 +88,7 @@ watch(
 		if (sd) setDocument({ name: sd, label: imp.doc?.import_title || props.name }, projectChip);
 		else if (projectChip) setProject(projectChip);
 	},
-	{ immediate: true },
+	{ immediate: true }
 );
 
 const pageReview = ref(null);
@@ -104,7 +104,7 @@ const sdStats = useList({
 });
 const sourceStats = computed(() => sdStats.data?.[0] || null);
 const docAudit = computed(
-	() => sourceStats.value?.canonical_mean ?? sourceStats.value?.mean_score,
+	() => sourceStats.value?.canonical_mean ?? sourceStats.value?.mean_score
 );
 function fmtCost(v) {
 	return v ? `$${Number(v).toFixed(4)}` : "—";

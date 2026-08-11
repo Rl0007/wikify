@@ -475,7 +475,6 @@ function onKeydown(e) {
 					</Dropdown>
 				</div>
 			</div>
-
 		</aside>
 	</Transition>
 </template>

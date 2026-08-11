@@ -15,11 +15,11 @@ const project = useDoc({ doctype: "Wikify Project", name: props.name });
 watch(
 	() => props.name,
 	(name) => name && setProject({ name, label: project.doc?.project_name || name }),
-	{ immediate: true },
+	{ immediate: true }
 );
 watch(
 	() => project.doc?.project_name,
-	(label) => label && setProject({ name: props.name, label }),
+	(label) => label && setProject({ name: props.name, label })
 );
 
 const showNewImport = ref(false);

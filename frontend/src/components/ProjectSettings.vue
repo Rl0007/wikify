@@ -40,7 +40,7 @@ watch(
 			archived: doc.status === "Archived",
 		};
 	},
-	{ immediate: true },
+	{ immediate: true }
 );
 
 const save = useCall({

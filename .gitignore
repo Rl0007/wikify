@@ -35,6 +35,9 @@ venv.bak/
 # Dependency directories
 node_modules/
 jspm_packages/
+# `bench build` symlinks the app's node_modules into public/; git sees a symlink,
+# not a directory, so the `node_modules/` rule above does not cover it.
+wikify/public/node_modules
 
 # Frontend build output (SPA). www/wikify.html is emitted by the vite plugin.
 frontend/dist/

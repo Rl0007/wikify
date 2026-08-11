@@ -205,9 +205,7 @@ def _read_wiki_page(ctx: Ctx, args: dict) -> str:
 	name = args.get("name")
 	if not name:
 		return _("Provide the section `name`.")
-	sec = frappe.db.get_value(
-		"Source Section", name, ["title", "markdown", "wiki_document"], as_dict=True
-	)
+	sec = frappe.db.get_value("Source Section", name, ["title", "markdown", "wiki_document"], as_dict=True)
 	if not sec:
 		return _("Section {0} not found.").format(name)
 	if not sec.wiki_document or not frappe.db.exists("Wiki Document", sec.wiki_document):
