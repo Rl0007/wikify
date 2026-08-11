@@ -283,19 +283,19 @@ def label_count(labels: list[tuple], region_box: tuple) -> int:
 	return sum(1 for box in labels if overlap_fraction(box, [region_box]) > 0.6)
 
 
-def graphic_regions(page, blocks: list, occupied: list[tuple]) -> list[Region]:
+def graphic_regions(
+	page_box: tuple, blocks: list, graphics: list[tuple], occupied: list[tuple]
+) -> list[Region]:
 	"""Clusters of non-grid ink, each classified `flow` or `figure`.
 
 	Labelled boxes wired together are a flow — mermaid's actual job. Wordless ink is a figure,
 	where a crop of the original is the only faithful representation we can offer.
+
+	`graphics` is the page's furniture-free ink, passed in rather than re-derived: reading it
+	means `page.get_drawings()`, which costs ~25ms on a drawing-heavy page.
 	"""
-	page_box = tuple(float(value) for value in page.rect)
 	labels = text_boxes(blocks)
-	boxes = [
-		box
-		for box in graphic_boxes(page, blocks)
-		if not is_furniture(box, page_box) and overlap_fraction(box, occupied) <= 0.5
-	]
+	boxes = [box for box in graphics if overlap_fraction(box, occupied) <= 0.5]
 
 	cells: set[tuple[int, int]] = set()
 	for box in boxes:
@@ -316,9 +316,8 @@ def graphic_regions(page, blocks: list, occupied: list[tuple]) -> list[Region]:
 	return regions
 
 
-def prose_region(page, blocks: list, occupied: list[tuple]) -> Region | None:
+def prose_region(page_box: tuple, blocks: list, occupied: list[tuple]) -> Region | None:
 	"""The union of text blocks outside every graphic region, if any survive."""
-	page_box = tuple(float(value) for value in page.rect)
 	box = None
 	for candidate in text_boxes(blocks):
 		if is_furniture(candidate, page_box) or overlap_fraction(candidate, occupied) > 0.5:
@@ -339,19 +338,24 @@ def prose_region(page, blocks: list, occupied: list[tuple]) -> Region | None:
 
 
 def find_regions(page) -> list[Region]:
-	"""Shape-classified regions of one page: grids first, then the remaining ink, then prose."""
+	"""Shape-classified regions of one page: grids first, then the remaining ink, then prose.
+
+	The page's blocks and its ink are read once here and threaded down — the grid pass and
+	the graphic pass used to call `page.get_drawings()` each, doubling the most expensive
+	step in the analysis for a list both of them already had.
+	"""
 	blocks = page.get_text("blocks")
 	page_box = tuple(float(value) for value in page.rect)
-	boxes = [box for box in graphic_boxes(page, blocks) if not is_furniture(box, page_box)]
-	regions = table_regions(page_box, boxes)
-	regions.extend(graphic_regions(page, blocks, [region.bbox for region in regions]))
-	prose = prose_region(page, blocks, [region.bbox for region in regions])
+	graphics = [box for box in graphic_boxes(page, blocks) if not is_furniture(box, page_box)]
+	regions = table_regions(page_box, graphics)
+	regions.extend(graphic_regions(page_box, blocks, graphics, [region.bbox for region in regions]))
+	prose = prose_region(page_box, blocks, [region.bbox for region in regions])
 	if prose:
 		regions.append(prose)
 	return regions
 
 
-def classify_page(page, min_chars: int, min_drawings: int, regions: list[Region] | None = None) -> str:
+def classify_page(page, min_chars: int, min_drawings: int) -> str:
 	"""Page kind from its regions: `visual` | `mixed` | `text`.
 
 	`visual` keeps its old meaning — no usable text layer, so the rendered image is the only
@@ -359,8 +363,7 @@ def classify_page(page, min_chars: int, min_drawings: int, regions: list[Region]
 	layer *and* substantial table/diagram ink, which still needs a vision model to recover the
 	structure but must go on being scored against its text layer.
 	"""
-	if regions is None:
-		regions = find_regions(page)
+	regions = find_regions(page)
 	prose_chars = len(page.get_text("text").strip())
 	graphics = [region for region in regions if region.shape in (TABLE, FLOW, FIGURE)]
 	if prose_chars < min_chars and (graphics or page.get_images()):

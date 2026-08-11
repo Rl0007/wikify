@@ -14,6 +14,19 @@ from frappe.utils import now_datetime
 # How many prior messages to replay as context each turn.
 HISTORY_LIMIT = 40
 
+# Both session doctypes cap `title` at 140; 120 leaves the trimmed line visibly short of it.
+TITLE_CHARS = 120
+
+
+def session_title(first_message: str | None) -> str:
+	"""A conversation's title: the first line of its opening message, trimmed.
+
+	Shared with the Ask surface (`rag.history`) so the two conversation lists cannot title
+	themselves differently.
+	"""
+	lines = (first_message or "").strip().splitlines()
+	return lines[0][:TITLE_CHARS] if lines else ""
+
 
 def get_or_create(
 	session_id: str | None,
@@ -126,9 +139,8 @@ def set_running(session: str, value: bool) -> None:
 def touch(session: str, *, first_user_message: str | None = None) -> None:
 	"""Bump `last_interaction_on`; set a title from the first user message if unset."""
 	values = {"last_interaction_on": now_datetime()}
-	if first_user_message and not frappe.db.get_value("Wikify Agent Session", session, "title"):
-		title = first_user_message.strip().splitlines()[0][:120] if first_user_message.strip() else None
-		if title:
-			values["title"] = title
+	title = session_title(first_user_message)
+	if title and not frappe.db.get_value("Wikify Agent Session", session, "title"):
+		values["title"] = title
 	frappe.db.set_value("Wikify Agent Session", session, values)
 	frappe.db.commit()

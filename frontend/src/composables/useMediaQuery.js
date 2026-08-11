@@ -32,3 +32,10 @@ export function useMediaQuery(query) {
 export function useIsNarrow() {
 	return useMediaQuery("(max-width: 1023px)");
 }
+
+// Phone-width switch for the app shell and page headers. Mirrors frappe-ui's own
+// `breakpoints.smaller('sm')` (Tailwind sm = 640px): below it the shell swaps to the
+// mobile chrome and header actions drop their labels.
+export function useIsMobile() {
+	return useMediaQuery("(max-width: 639px)");
+}

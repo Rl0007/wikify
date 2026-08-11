@@ -10,7 +10,7 @@ import {
 import { computed, onMounted, ref, watch } from "vue";
 import { RouterLink, useRoute } from "vue-router";
 import { useTheme } from "@/utils/useTheme";
-import { useIsMobile } from "@/composables/useIsMobile";
+import { useIsMobile } from "@/composables/useMediaQuery";
 import { session } from "@/data/session";
 import AgentChatPanel from "@/components/AgentChatPanel.vue";
 import AppSettingsDialog from "@/components/AppSettingsDialog.vue";

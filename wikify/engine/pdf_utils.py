@@ -29,7 +29,6 @@ def classify_page(
 	page,
 	min_chars: int = config.VISUAL_MIN_CHARS,
 	min_drawings: int = config.VISUAL_MIN_DRAWINGS,
-	page_regions: list | None = None,
 ) -> str:
 	"""Page type: `visual` | `mixed` | `text`.
 
@@ -39,9 +38,9 @@ def classify_page(
 	filed `text` — the visual path was unreachable. `regions.classify_page` answers it from the
 	page's shape regions instead, and adds `mixed`: a trustworthy text layer *plus* substantial
 	table/diagram ink, which needs a vision model to recover structure but must go on being
-	scored against its text layer. Callers pass `page_regions` when they already have them.
+	scored against its text layer.
 	"""
-	return regions.classify_page(page, min_chars, min_drawings, page_regions)
+	return regions.classify_page(page, min_chars, min_drawings)
 
 
 def render_png(page, dpi: int = config.RENDER_DPI) -> bytes:

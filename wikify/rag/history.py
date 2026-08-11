@@ -10,127 +10,29 @@ double as a free eval set — "which questions did we route wrong", "which sourc
 answers actually rest on" — which is why `route_intent` is indexed and why a `turn`
 integer pairs a question row with its answer row instead of leaving that to creation order.
 
-Cost is summed across all three legs of one ask:
-
-- **routing** and **rerank** go through `engine.llm.chat_completion`, which already records
-  cost + tokens into its own metrics buffer — read here by watermark rather than by
-  `reset_metrics()`, because a parse job sharing the process would lose its buffer.
-- **synthesis** goes through litellm (`agent/llm.complete_with_tools`), which reports usage
-  only through a success callback; `add_litellm_metrics_callback` registers one.
+What a turn cost is not measured here. `rag.usage` accumulates all three legs of the ask
+— routing, rerank and synthesis — and `answer()` returns that total, so the figure logged
+is character-for-character the one the reader was shown. A second, independently derived
+total is how the log and the answer came to disagree by 13x.
 """
 
 from __future__ import annotations
 
 import json
-import threading
-import time
 
 import frappe
 from frappe import _
+from frappe.query_builder.functions import Count, Sum
 from frappe.utils.data import cint, flt
 
 from wikify.agent import llm as agent_llm
-from wikify.engine import llm as engine_llm
-from wikify.engine.store import cost_of
+from wikify.agent.session import session_title
 
 # How many prior turns the router replays to rewrite a follow-up question.
 HISTORY_TURNS = 10
 
 # Newest-first page of conversations for the sidebar.
 SESSION_PAGE_LENGTH = 50
-
-# litellm hands a streamed completion to its success callback from a thread pool
-# (`executor.submit(self.logging_obj.success_handler, ...)` at end-of-stream), so the
-# synthesis usage can land a few milliseconds after `answer()` has already returned.
-# The answer is fully streamed to the user by then, so waiting briefly for it costs the
-# reader nothing and is the difference between logging the whole ask and logging only
-# its two cheap legs.
-SYNTHESIS_GRACE_SECONDS = 0.3
-SYNTHESIS_POLL_SECONDS = 0.02
-
-_metrics_lock = threading.Lock()
-_litellm_metrics: list[dict] = []
-_callback_registered = False
-
-# Watermarks into both buffers, per thread, taken by `start_turn()`.
-_watermarks: dict[int, tuple[int, int]] = {}
-
-
-# --- cost capture -------------------------------------------------------------------
-
-
-def add_litellm_metrics_callback() -> None:
-	"""Register the litellm success callback once, so synthesis reports cost + tokens."""
-	global _callback_registered
-	if _callback_registered:
-		return
-
-	import litellm
-
-	litellm.success_callback = [*litellm.success_callback, record_litellm_metrics]
-	_callback_registered = True
-
-
-def record_litellm_metrics(kwargs, response, start_time, end_time) -> None:
-	"""litellm success callback — mirrors an `engine.llm` metrics entry.
-
-	Never raise: litellm swallows callback errors, but a broken callback would still cost
-	every agent completion a traceback in the logs.
-	"""
-	try:
-		usage = getattr(response, "usage", None)
-		with _metrics_lock:
-			_litellm_metrics.append(
-				{
-					"label": "synthesis",
-					"model": kwargs.get("model"),
-					"cost": kwargs.get("response_cost"),
-					"prompt_tokens": getattr(usage, "prompt_tokens", None),
-					"completion_tokens": getattr(usage, "completion_tokens", None),
-				}
-			)
-	except Exception:
-		frappe.log_error(title="Wikify ask cost callback failed")
-
-
-def start_turn() -> None:
-	"""Mark where this ask's LLM calls begin. Call immediately before `answer()`."""
-	add_litellm_metrics_callback()
-	with _metrics_lock:
-		# ponytail: both buffers are process-wide, so a second ask running concurrently in
-		# the same worker can inflate this turn's cost; give engine.llm a per-turn buffer
-		# if per-ask cost ever has to be billable rather than indicative.
-		_watermarks[threading.get_ident()] = (len(engine_llm.get_metrics()), len(_litellm_metrics))
-
-
-def turn_metrics(*, expect_synthesis: bool = True) -> list[dict]:
-	"""Every LLM call recorded since `start_turn()` — routing, rerank and synthesis."""
-	engine_mark, litellm_mark = _watermarks.pop(threading.get_ident(), (0, 0))
-	if expect_synthesis:
-		wait_for_synthesis_metrics(litellm_mark)
-	with _metrics_lock:
-		synthesis = _litellm_metrics[litellm_mark:]
-		del _litellm_metrics[litellm_mark:]
-	return engine_llm.get_metrics()[engine_mark:] + synthesis
-
-
-def wait_for_synthesis_metrics(litellm_mark: int) -> None:
-	deadline = time.monotonic() + SYNTHESIS_GRACE_SECONDS
-	while time.monotonic() < deadline:
-		with _metrics_lock:
-			if len(_litellm_metrics) > litellm_mark:
-				return
-		time.sleep(SYNTHESIS_POLL_SECONDS)
-
-
-def tokens_of(metrics: list[dict]) -> tuple[int, int]:
-	"""Prompt and completion tokens across a metrics buffer."""
-	prompt = sum(cint(entry.get("prompt_tokens")) for entry in metrics)
-	completion = sum(cint(entry.get("completion_tokens")) for entry in metrics)
-	return prompt, completion
-
-
-# --- conversations ------------------------------------------------------------------
 
 
 def start_session(project: str | None = None, title: str | None = None) -> str:
@@ -140,15 +42,9 @@ def start_session(project: str | None = None, title: str | None = None) -> str:
 
 	session = frappe.new_doc("Wikify Ask Session")
 	session.project = project
-	session.title = summarize(title) if title else None
+	session.title = session_title(title) or None
 	session.insert()
 	return session.name
-
-
-def summarize(question: str) -> str:
-	"""A conversation title: the first line of the first question, trimmed."""
-	first_line = (question or "").strip().splitlines()
-	return first_line[0][:120] if first_line else ""
 
 
 def record_turn(
@@ -159,14 +55,13 @@ def record_turn(
 	project: str | None = None,
 	took_ms: int | None = None,
 	model: str | None = None,
-	llm_metrics: list[dict] | None = None,
 ) -> str:
 	"""Persist one ask — the question, the answer, its route, citations and cost.
 
-	`result` is the dict `rag.answer.answer()` returns. Opens a conversation when `session`
-	is empty — or names one that no longer exists, the same tolerance
-	`agent.session.get_or_create` has — and returns the conversation name either way, so
-	the caller can hand it back to the interface as one line at the end of `ask()`.
+	`result` is the dict `rag.answer.answer()` returns, cost and tokens included. Opens a
+	conversation when `session` is empty — or names one that no longer exists, the same
+	tolerance `agent.session.get_or_create` has — and returns the conversation name either
+	way, so the caller can hand it back to the interface as one line at the end of `ask()`.
 	"""
 	if not session or not frappe.db.exists("Wikify Ask Session", session):
 		session = start_session(project=project, title=question)
@@ -181,9 +76,9 @@ def record_turn(
 	# the router degrades on an unknown type the same way.
 	if section_type and not frappe.db.exists("Section Type", section_type):
 		section_type = None
-	metrics = llm_metrics if llm_metrics is not None else turn_metrics(expect_synthesis=not refused)
-	prompt_tokens, completion_tokens = tokens_of(metrics)
-	cost = flt(cost_of(metrics), 6)
+	prompt_tokens = cint(result.get("prompt_tokens"))
+	completion_tokens = cint(result.get("completion_tokens"))
+	cost = flt(result.get("cost"), 6)
 	turn = cint(frappe.db.count("Wikify Ask Message", {"session": session, "role": "question"})) + 1
 
 	append_message(session, "question", question, turn=turn)
@@ -197,19 +92,41 @@ def record_turn(
 		route_reason=route.get("reason"),
 		citations=result.get("citations") or [],
 		refused=refused,
-		took_ms=cint(took_ms or result.get("took_ms")),
+		took_ms=cint(took_ms),
 		model=model or agent_llm.resolve_model(project=conversation.project),
 		prompt_tokens=prompt_tokens,
 		completion_tokens=completion_tokens,
 		cost=cost,
 	)
 
-	conversation.title = conversation.title or summarize(question)
-	conversation.message_count = cint(conversation.message_count) + 2
-	conversation.total_tokens = cint(conversation.total_tokens) + prompt_tokens + completion_tokens
-	conversation.total_cost = flt(flt(conversation.total_cost) + cost, 6)
+	conversation.title = conversation.title or session_title(question)
+	set_totals(conversation)
 	conversation.save()
 	return session
+
+
+def set_totals(conversation) -> None:
+	"""Re-total a conversation from its own turns.
+
+	Summed rather than incremented so the header cannot drift from the rows it claims to
+	total — a deleted turn, a failed insert or a legacy row totalled by the old
+	double-counting cost path all heal on the next turn.
+	"""
+	message = frappe.qb.DocType("Wikify Ask Message")
+	totals = (
+		frappe.qb.from_(message)
+		.select(
+			Count(message.name).as_("messages"),
+			Sum(message.cost).as_("cost"),
+			Sum(message.prompt_tokens).as_("prompt_tokens"),
+			Sum(message.completion_tokens).as_("completion_tokens"),
+		)
+		.where(message.session == conversation.name)
+		.run(as_dict=True)[0]
+	)
+	conversation.message_count = cint(totals.messages)
+	conversation.total_tokens = cint(totals.prompt_tokens) + cint(totals.completion_tokens)
+	conversation.total_cost = flt(totals.cost, 6)
 
 
 def append_message(session: str, role: str, content: str, **values) -> str:

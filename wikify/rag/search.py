@@ -17,11 +17,13 @@ Two rules hold across all modes:
 from __future__ import annotations
 
 import re
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 
 import frappe
+from frappe.utils.data import cint, flt
 
-from wikify.rag import chunk, embed, store, usage
+from wikify.rag import chunk, embed, evidence, store, usage
 
 MODES = ("vector", "fts", "hybrid", "filter")
 FTS_COLUMN = "text"
@@ -54,6 +56,18 @@ CANDIDATE_MULTIPLIER = 5
 CANDIDATE_FLOOR = 50
 RERANK_CANDIDATES = 50
 RERANK_SNIPPET_CHARS = 700
+# Asked to grade a whole candidate list in one reply the classifier degenerates into a run
+# of zeros. Measured on PRJ-2026-00002: "what is the surcharge rate when total income
+# exceeds 2 crore" scored 0.0 across all 35 candidates in a single call, and found the
+# answering section at 8.0 when the same 35 candidates were graded ten at a time.
+RERANK_BATCH_SIZE = 10
+# The batches are independent HTTP POSTs, so they run concurrently and the rerank costs one
+# batch of latency rather than all of them. What may NOT cross into a pool thread is frappe:
+# `frappe.local` is unbound there, so the OpenRouter key is resolved on the calling thread and
+# each batch's usage is billed on it too (`usage` is thread-local by design — see `rag.usage`).
+# ponytail: fixed pool width, sized for the ~4 batches a 35-candidate rerank produces; make it
+# proportional to the batch count if RERANK_CANDIDATES ever grows past a couple of hundred.
+RERANK_WORKERS = 4
 
 RESULT_COLUMNS = [
 	"id",
@@ -89,9 +103,35 @@ class Hit:
 	vector_rank: int | None = None
 	fts_rank: int | None = None
 	rerank_score: float | None = None
+	# The embedding leg's absolute 0-1 similarity, kept alongside the rank-based fusion
+	# score because it is the one retrieval number that means the same thing across
+	# queries — `answer.below_floor` reads it as a second opinion on the reranker.
+	vector_score: float | None = None
 
 	def as_dict(self) -> dict:
 		return self.__dict__.copy()
+
+
+def hit_value(hit, key: str):
+	"""One field of a hit, whether it is still a `Hit` or already `as_dict()`ed.
+
+	The two surfaces that label a hit sit either side of the whitelisted API — synthesis
+	holds Hits, the agent tool holds the JSON it returned — and they must print the same
+	label, so the labelling reads both shapes rather than being written twice.
+	"""
+	return hit.get(key) if isinstance(hit, dict) else getattr(hit, key, None)
+
+
+def page_label(hit) -> str:
+	"""A hit's page span as it is shown: `p.5`, or `p.5-7` when it runs across pages."""
+	start, end = hit_value(hit, "page_start"), hit_value(hit, "page_end")
+	return f"p.{start}-{end}" if end and end != start else f"p.{start}"
+
+
+def crumb(hit) -> str:
+	"""The breadcrumb: document title, then the section's ancestor path (or its own title)."""
+	path = hit_value(hit, "hierarchy_path") or hit_value(hit, "title")
+	return f"{hit_value(hit, 'document_title')}{chunk.CONTEXT_SEPARATOR}{path}"
 
 
 def assert_acl_decision(allowed_projects) -> None:
@@ -217,8 +257,17 @@ def rank_by_chunk(rows: list[dict]) -> dict[str, int]:
 	return {row["id"]: position for position, row in enumerate(rows, start=1)}
 
 
+def similarity_by_chunk(rows: list[dict]) -> dict[str, float]:
+	"""chunk id → embedding similarity, read off the vector rows the ranking pass already
+	scanned. Free: no extra query, the rows are in hand."""
+	return {row["id"]: row_score(row) for row in rows}
+
+
 def expand_to_sections(
-	rows: list[dict], vector_ranks: dict[str, int], fts_ranks: dict[str, int]
+	rows: list[dict],
+	vector_ranks: dict[str, int],
+	fts_ranks: dict[str, int],
+	vector_scores: dict[str, float],
 ) -> list[Hit]:
 	"""Dedupe chunk hits to their parent section and attach the full section markdown."""
 	best: dict[str, dict] = {}
@@ -232,7 +281,7 @@ def expand_to_sections(
 
 	sections = {
 		section["name"]: section
-		for section in chunk.get_rows_by_name(
+		for section in evidence.get_rows_by_name(
 			"Source Section",
 			list(best),
 			["name", "title", "markdown", "hierarchy_path", "section_type", "source_document"],
@@ -240,7 +289,7 @@ def expand_to_sections(
 	}
 	documents = {
 		document["name"]: document
-		for document in chunk.get_rows_by_name(
+		for document in evidence.get_rows_by_name(
 			"Source Document",
 			[entry["row"]["source_document"] for entry in best.values()],
 			["name", "title"],
@@ -259,6 +308,11 @@ def expand_to_sections(
 		]
 		vector_hits = [rank for rank, _ in ranks if rank]
 		fts_hits = [rank for _, rank in ranks if rank]
+		similarities = [
+			vector_scores[chunk_id]
+			for chunk_id in matched_chunks[section_name]
+			if vector_scores.get(chunk_id) is not None
+		]
 		hits.append(
 			Hit(
 				chunk_id=row["id"],
@@ -276,65 +330,114 @@ def expand_to_sections(
 				score=round(entry["score"], 6),
 				vector_rank=min(vector_hits) if vector_hits else None,
 				fts_rank=min(fts_hits) if fts_hits else None,
+				vector_score=round(max(similarities), 6) if similarities else None,
 			)
 		)
 	return hits
 
 
-def rerank_scores(query: str, hits: list[Hit], model: str) -> dict[int, float]:
-	"""Ask the cheap model to score each candidate 0-10 for answering `query`."""
+RERANK_SYSTEM_PROMPT = (
+	"You rank retrieved document sections by how well each one answers the "
+	'user question. Reply with JSON: {"scores": [{"id": <candidate number>, '
+	'"score": <0-10>}]} covering every candidate. No prose.'
+)
+
+
+def score_batch(
+	query: str, hits: list[Hit], offset: int, model: str, api_key: str = ""
+) -> tuple[dict[int, float], dict | None]:
+	"""Score one batch of candidates 0-10, keyed by each one's position in the FULL list.
+
+	A reply that skips candidates is dropped whole: the missing ones would otherwise read as
+	an unscored 0 and outrank nothing, which is the same silent zero this batching exists to
+	prevent.
+
+	Returns the scores and the completion's usage payload rather than folding the usage in
+	here: this runs on a pool thread and `usage` is thread-local, so only the caller can bill
+	it. A dropped batch still reports its usage — the call was made and it was paid for.
+	"""
 	from wikify.engine import llm
 
 	candidates = "\n\n".join(
-		f"[{position}] {hit.document_title}{chunk.CONTEXT_SEPARATOR}{hit.hierarchy_path or hit.title}\n"
+		f"[{offset + position}] {hit.document_title}{chunk.CONTEXT_SEPARATOR}{hit.hierarchy_path or hit.title}\n"
 		f"{(hit.text or '')[:RERANK_SNIPPET_CHARS]}"
 		for position, hit in enumerate(hits)
 	)
 	response = llm.chat_completion(
 		model,
 		[
-			{
-				"role": "system",
-				"content": (
-					"You rank retrieved document sections by how well each one answers the "
-					'user question. Reply with JSON: {"scores": [{"id": <candidate number>, '
-					'"score": <0-10>}]} covering every candidate. No prose.'
-				),
-			},
+			{"role": "system", "content": RERANK_SYSTEM_PROMPT},
 			{"role": "user", "content": f"Question: {query}\n\nCandidates:\n\n{candidates}"},
 		],
 		label="rag_rerank",
 		response_format={"type": "json_object"},
+		api_key=api_key,
 	)
-	usage.add(response.get("usage"))
-	content = response["choices"][0]["message"]["content"]
-	parsed = frappe.parse_json(content) or {}
-	from frappe.utils.data import cint, flt
-
-	return {cint(item.get("id")): flt(item.get("score")) for item in parsed.get("scores") or []}
+	parsed = frappe.parse_json(response["choices"][0]["message"]["content"]) or {}
+	scores = {cint(item.get("id")): flt(item.get("score")) for item in parsed.get("scores") or []}
+	complete = set(range(offset, offset + len(hits))) <= set(scores)
+	return (scores if complete else {}), response.get("usage")
 
 
-def ranks_candidates(scores: dict[int, float]) -> bool:
-	"""False when the reply carries no ranking information, so it must not be read as one.
+def rerank_scores(query: str, hits: list[Hit], model: str) -> dict[int, float]:
+	"""Ask the cheap model to score every candidate 0-10 for answering `query`.
 
-	The cheap classifier intermittently *succeeds* and returns 0 for every candidate. Taken
-	at face value that is a confident "none of this is relevant", and `answer.below_floor`
-	then refuses a question the retriever had already answered correctly — the worst failure
-	this system has, because "the document doesn't say" is indistinguishable from the
-	document genuinely not covering it. One flat verdict across several candidates is the
-	reranker being unavailable, not the corpus being empty, so the caller keeps the fusion
-	order instead.
+	Graded in batches of `RERANK_BATCH_SIZE` — see the constant for the measurement that
+	forced it, and `RERANK_WORKERS` for why the batches run concurrently. The candidate
+	numbers stay global across batches so a score always maps back to the same hit.
 	"""
-	present = [score for score in scores.values() if score is not None]
-	if len(present) < 2:
-		return bool(present)
-	return len(set(present)) > 1
+	from wikify.engine import settings
+
+	api_key = settings.openrouter_key()
+	offsets = range(0, len(hits), RERANK_BATCH_SIZE)
+	with ThreadPoolExecutor(max_workers=RERANK_WORKERS) as pool:
+		batches = list(
+			pool.map(
+				lambda offset: score_batch(
+					query, hits[offset : offset + RERANK_BATCH_SIZE], offset, model, api_key
+				),
+				offsets,
+			)
+		)
+
+	scores: dict[int, float] = {}
+	for batch_scores, batch_usage in batches:
+		usage.add(batch_usage)
+		scores.update(batch_scores)
+	return scores
+
+
+def usable_verdict(scores: dict[int, float], expected: int) -> bool:
+	"""False when the reply carries no verdict at all, so it must not be read as one.
+
+	Two shapes are not verdicts. A reply that covers only part of the candidate list lost
+	whichever batch failed, so the survivors would be ranked against nothing. And one
+	identical non-zero score across every candidate is the model declining to discriminate.
+
+	An all-zero reply IS a verdict — "none of these are relevant" — and is trusted as one,
+	because the false all-zeros that made this system refuse answerable questions came from
+	over-long candidate lists (see `RERANK_BATCH_SIZE`), not from the model's judgement.
+	`answer.below_floor` never lets it refuse alone: the embedding leg has to agree.
+	"""
+	if len(scores) < expected:
+		return False
+	present = set(scores.values())
+	# "Declining to discriminate" needs something to discriminate between, so a lone
+	# candidate's score is always taken at face value.
+	return len(scores) < 2 or len(present) > 1 or present == {0.0}
+
+
+def rank_key(hit: Hit) -> tuple[float, float]:
+	"""How hits are ordered once a rerank has run: the model's judgement first, the fusion
+	score as the tiebreak. Candidates past `RERANK_CANDIDATES` were never judged and sort
+	below the ones that were."""
+	return (hit.rerank_score if hit.rerank_score is not None else -1.0, hit.score)
 
 
 def rerank_hits(query: str, hits: list[Hit]) -> list[Hit]:
 	"""LLM rerank of the top candidates. Never fatal — the search path degrades to the
 	unreranked order when no OpenRouter key is configured, the call fails, or the reply
-	ranks nothing."""
+	carries no verdict."""
 	from wikify.engine import llm, settings
 
 	if not hits or not llm.has_openrouter():
@@ -347,18 +450,16 @@ def rerank_hits(query: str, hits: list[Hit]) -> list[Hit]:
 		frappe.log_error(title="RAG rerank failed", message=frappe.get_traceback())
 		return hits
 
-	if not ranks_candidates(scores):
+	if not usable_verdict(scores, len(head)):
 		frappe.log_error(
-			title="RAG rerank returned a flat verdict",
+			title="RAG rerank returned no verdict",
 			message=f"Query: {query}\nCandidates: {len(head)}\nScores: {scores}",
 		)
 		return hits
 
 	for position, hit in enumerate(head):
 		hit.rerank_score = scores.get(position)
-	head.sort(
-		key=lambda hit: (hit.rerank_score if hit.rerank_score is not None else -1.0, hit.score), reverse=True
-	)
+	head.sort(key=rank_key, reverse=True)
 	return head + tail
 
 
@@ -395,11 +496,13 @@ def search(
 
 	vector_ranks: dict[str, int] = {}
 	fts_ranks: dict[str, int] = {}
+	vector_scores: dict[str, float] = {}
 	if mode == "filter":
 		rows = run_filter(table, where)
 	elif mode == "vector":
 		rows = run_vector(table, query, where, candidate_limit)
 		vector_ranks = rank_by_chunk(rows)
+		vector_scores = similarity_by_chunk(rows)
 	elif mode == "fts":
 		rows = run_fts(table, query, where, candidate_limit)
 		fts_ranks = rank_by_chunk(rows)
@@ -409,10 +512,12 @@ def search(
 		# re-embedding per pass is the expensive part, the extra scans are not.
 		query_vector = embed.embed_one(query)
 		rows = run_hybrid(table, query, where, candidate_limit, vector=query_vector)
-		vector_ranks = rank_by_chunk(run_vector(table, query, where, candidate_limit, vector=query_vector))
+		vector_rows = run_vector(table, query, where, candidate_limit, vector=query_vector)
+		vector_ranks = rank_by_chunk(vector_rows)
+		vector_scores = similarity_by_chunk(vector_rows)
 		fts_ranks = rank_by_chunk(run_fts(table, query, where, candidate_limit))
 
-	hits = expand_to_sections(rows, vector_ranks, fts_ranks)
+	hits = expand_to_sections(rows, vector_ranks, fts_ranks, vector_scores)
 	# Filter mode re-sorts by document/page below, so a rerank here would be an LLM call
 	# whose entire output is thrown away.
 	if rerank and query and mode != "filter":
@@ -420,5 +525,10 @@ def search(
 
 	if mode == "filter":
 		return sorted(hits, key=lambda hit: (hit.document_title, hit.page_start, hit.title))
-	hits.sort(key=lambda hit: hit.score, reverse=True)
+	# `rank_key` falls back to the fusion score, so an unreranked search is ordered exactly
+	# as before. Sorting on `hit.score` here used to discard the rerank outright: the
+	# reranked winner was pushed back into fusion position and then cut by the `limit`
+	# slice, which is how "slab rates under section 115BAC(1A)" scored 8.0 at fusion rank 10
+	# and was never returned at all.
+	hits.sort(key=rank_key, reverse=True)
 	return hits[: int(limit)]

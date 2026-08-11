@@ -19,7 +19,6 @@ from wikify.agent import llm
 from wikify.engine import settings
 from wikify.rag import evidence, usage
 from wikify.rag import search as rag_search
-from wikify.rag.chunk import CONTEXT_SEPARATOR
 from wikify.rag.router import Route, route
 
 # Which retrieval leg each intent takes. "filter" returns every match (completeness);
@@ -30,6 +29,8 @@ TOP_K = 8
 # An exhaustive answer is allowed to be long, but a runaway type (e.g. "other") must not
 # push a thousand chunks into the prompt.
 EXHAUSTIVE_LIMIT = 60
+# The naive leg of `compare`: plain vector top-k with no filter and no routing.
+NAIVE_LIMIT = 8
 
 # RRF fusion scores are RANK-based: a top-ranked irrelevant chunk scores exactly what a
 # top-ranked perfect one does (measured: 0.0328 for both an on-topic and a nonsense query
@@ -39,8 +40,17 @@ EXHAUSTIVE_LIMIT = 60
 MIN_RERANK_SCORE = 3.0
 # Raw vector distance does carry signal (measured: 0.51 on-topic vs 0.33 for nonsense).
 MIN_VECTOR_SCORE = 0.36
-# ponytail: both floors are calibrated against the demo corpus with potion-base-8M; recheck
-# them from the eval harness (recall@k per golden question) if the embedder or corpus changes.
+# The reranker must never be able to mute the product on its own, because it fails silently:
+# it answers, it looks healthy, and it scores every candidate 0. So a below-floor rerank only
+# refuses when the embedding leg agrees, and a strong embedding match overrules it outright.
+# Deliberately well clear of MIN_VECTOR_SCORE — overruling a refusal takes real confidence,
+# not merely "good enough to answer from". Measured on potion-base-8M: questions the corpus
+# answers peak at 0.56-0.63 (ICAI) and 0.60 (demo), questions it does not at 0.39-0.45 (ICAI)
+# and 0.44 (demo).
+STRONG_VECTOR_SCORE = 0.5
+# ponytail: all three floors are calibrated against potion-base-8M on the demo + ICAI
+# corpora; recheck them from the eval harness (recall@k per golden question) if the embedder
+# or corpus changes.
 
 REFUSAL = (
 	"I couldn't find this in the wiki. Nothing in the indexed documents is close enough to "
@@ -71,52 +81,122 @@ def retrieve(
 	project: str | None,
 	rerank: bool,
 	allowed_projects=rag_search.ACL_REQUIRED,
+	top_k: int = TOP_K,
 ) -> list:
 	"""Run the leg the route chose. Exhaustive returns ALL matches, not a top-k.
 
 	`allowed_projects` carries the caller's ACL decision straight through to `search()`,
-	which is where an omitted one throws.
+	which is where an omitted one throws. `top_k` widens the similarity legs for a caller
+	measuring recall at a different k (the eval harness) — the exhaustive leg ignores it,
+	because completeness is the whole point of that mode.
 	"""
 	mode = MODE_FOR_INTENT[decided.intent]
 	return rag_search.search(
 		decided.query,
 		project=project,
 		section_type=decided.section_type,
-		limit=EXHAUSTIVE_LIMIT if mode == "filter" else TOP_K,
+		limit=EXHAUSTIVE_LIMIT if mode == "filter" else top_k,
 		mode=mode,
 		rerank=rerank,
 		allowed_projects=allowed_projects,
 	)
 
 
+def naive_retrieve(query: str, project: str | None, allowed_projects, limit: int = NAIVE_LIMIT) -> list:
+	"""The baseline: raw question, plain vector top-k, no router and no metadata filter.
+
+	This is what a textbook RAG pipeline does, and it is the thing the POC argues against —
+	so it is defined once and both the demo API and the eval harness measure the same leg.
+	"""
+	return rag_search.search(
+		query, project=project, limit=limit, mode="vector", allowed_projects=allowed_projects
+	)
+
+
+def compare(
+	query: str,
+	project: str | None,
+	allowed_projects,
+	naive_limit: int = NAIVE_LIMIT,
+	top_k: int = TOP_K,
+) -> dict:
+	"""Naive top-k beside the routed leg, plus the sections only routing found.
+
+	Hits and the `Route` come back as objects; each caller shapes its own payload. The demo
+	endpoint and the eval scorecard both read this, so the headline number they show can
+	never be computed two different ways — which is the exact drift the eval exists to catch.
+	"""
+	naive = naive_retrieve(query, project, allowed_projects, naive_limit)
+	decided = route(query, project)
+	routed = retrieve(decided, project, False, allowed_projects, top_k=top_k)
+	found_by_naive = {hit.section for hit in naive}
+	return {
+		"route": decided,
+		"naive": naive,
+		"routed": routed,
+		"missed_by_naive": [hit for hit in routed if hit.section not in found_by_naive],
+	}
+
+
+def best_vector_score(hits: list) -> float | None:
+	"""The closest embedding match in the result set, or None when this leg has no say."""
+	similarities = [hit.vector_score for hit in hits if hit.vector_score is not None]
+	return max(similarities) if similarities else None
+
+
 def below_floor(hits: list, mode: str) -> bool:
 	"""True when nothing retrieved is good enough to answer from.
+
+	Refusing is the most damaging thing this system does when it is wrong — to a reader
+	"I couldn't find this in the wiki" is indistinguishable from the document not covering
+	it — so it takes two independent legs to agree, never the reranker alone.
 
 	A `filter` leg is an exact metadata match — it either matched or it didn't — so only
 	emptiness refuses there, and the same holds for the rank-scored fusion legs.
 	"""
 	if not hits:
 		return True
-	# Only a real ranking may refuse. `search.rerank_hits` leaves every score unset when the
-	# reranker answers but ranks nothing, so a silent rerank failure degrades to the fusion
-	# order here rather than turning into "the wiki doesn't cover this".
-	reranked = [hit.rerank_score for hit in hits if hit.rerank_score is not None]
-	if reranked:
-		return max(reranked) < MIN_RERANK_SCORE
+	# `search.rerank_hits` leaves every score unset when the reranker carries no verdict, so
+	# a silent rerank failure degrades to the fusion order here rather than turning into
+	# "the wiki doesn't cover this".
+	if any(hit.rerank_score is not None for hit in hits):
+		return rerank_below_floor(hits) and not overrules_rerank(hits)
 	if mode == "vector":
 		return max(hit.score for hit in hits) < MIN_VECTOR_SCORE
 	return False
+
+
+def rerank_below_floor(hits: list) -> bool:
+	"""True when the reranker scored every candidate under the floor."""
+	reranked = [hit.rerank_score for hit in hits if hit.rerank_score is not None]
+	return bool(reranked) and max(reranked) < MIN_RERANK_SCORE
+
+
+def overrules_rerank(hits: list) -> bool:
+	"""True when the embedding leg is confident enough to veto a below-floor rerank."""
+	best = best_vector_score(hits)
+	return best is not None and best >= STRONG_VECTOR_SCORE
+
+
+def rerank_overruled(hits: list) -> bool:
+	"""The reranker wanted to refuse and the embedding leg would not let it."""
+	return rerank_below_floor(hits) and overrules_rerank(hits)
+
+
+def clear_rerank_scores(citations: list[dict]) -> None:
+	"""Drop the rerank numbers from the cards. Used when the embedding leg overruled the
+	rerank: those scores are demonstrably wrong, and a card reading "rerank 0.0" next to an
+	answer the reranker tried to suppress is worse than no number at all. `None` is the
+	signal the UI hides on."""
+	for citation in citations:
+		citation["rerank_score"] = None
 
 
 def format_context(hits: list) -> str:
 	"""The numbered excerpt block the model cites against — `[n]` is the hit's position."""
 	blocks = []
 	for position, hit in enumerate(hits, start=1):
-		pages = f"p.{hit.page_start}"
-		if hit.page_end and hit.page_end != hit.page_start:
-			pages = f"p.{hit.page_start}-{hit.page_end}"
-		crumb = f"{hit.document_title}{CONTEXT_SEPARATOR}{hit.hierarchy_path or hit.title}"
-		header = f"[{position}] {crumb} ({pages})"
+		header = f"[{position}] {rag_search.crumb(hit)} ({rag_search.page_label(hit)})"
 		if hit.section_type:
 			header += f" — type: {hit.section_type}"
 		blocks.append(f"{header}\n{hit.text}")
@@ -199,6 +279,8 @@ def answer(
 		refused = below_floor(hits, mode) or not settings.openrouter_key()
 
 		citations = [] if refused else [hit.as_dict() for hit in hits]
+		if citations and rerank_overruled(hits):
+			clear_rerank_scores(citations)
 		if on_citations:
 			on_citations(citations)
 

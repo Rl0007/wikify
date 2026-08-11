@@ -128,11 +128,14 @@ def add_document_cost(source_document: str, cost: float) -> None:
 
 
 def get_pages(source_document: str) -> list[dict]:
-	"""Pages of a doc (ordered) with the fields remediation needs to route + re-score."""
+	"""Pages of a doc (ordered) with the fields remediation needs to route + re-score.
+
+	`image` rides along because the remediation loop needs every page's crop URL — read per
+	page it was one query per page of the document."""
 	return frappe.get_all(
 		"Source Page",
 		filters={"source_document": source_document},
-		fields=["name", "page_no", "kind", "baseline_markdown", "verdict", "composite"],
+		fields=["name", "page_no", "kind", "baseline_markdown", "verdict", "composite", "image"],
 		order_by="page_no asc",
 	)
 
@@ -327,28 +330,54 @@ def replace_sections(source_document: str, sections) -> int:
 	clear, then insert in document order, resolving each section's parent by its
 	hierarchy path (the parent always precedes it). NestedSet manages `lft`/`rgt`;
 	`is_group` is set for any section another section nests under. Returns the count.
+
+	The whole rebuild indexes ONCE, at the end. Every insert fires `Source Section`'s
+	reindex hook, so sectionising a 296-section document cost ~600 redis round trips to
+	coalesce down to the single project rebuild this queues directly — half of them the
+	no-op "already queued" branch.
 	"""
+	from wikify.rag import events
+
 	# Full rebuild: raw-delete this doc's sections (other docs' subtrees are
 	# independent number-spaces, so NestedSet stays consistent without a global rebuild).
 	frappe.db.delete("Source Section", {"source_document": source_document})
 
 	parent_paths = {tuple(s.hierarchy_path[:-1]) for s in sections if len(s.hierarchy_path) > 1}
 	path_to_name: dict[tuple[str, ...], str] = {}
-	for idx, sec in enumerate(sections):
-		doc = frappe.new_doc("Source Section")
-		doc.source_document = source_document
-		doc.parent_source_section = path_to_name.get(tuple(sec.hierarchy_path[:-1]))
-		doc.is_group = 1 if tuple(sec.hierarchy_path) in parent_paths else 0
-		doc.title = sec.title
-		doc.section_type = sec.section_type
-		doc.level = sec.level
-		doc.hierarchy_path = " > ".join(sec.hierarchy_path)
-		doc.page_start = sec.page_start
-		doc.page_end = sec.page_end
-		doc.sort_order = idx
-		doc.markdown = sec.markdown
-		doc.insert(ignore_permissions=True)
-		path_to_name[tuple(sec.hierarchy_path)] = doc.name
+	suspended_by_caller = events.indexing_suspended()
+	# Restored rather than cleared: an outer bulk context may already hold the flag, and
+	# clearing it here would re-arm per-row indexing for the rest of that context.
+	skip_reindex_was = frappe.flags.wikify_skip_reindex
+	frappe.flags.wikify_skip_reindex = True
+	try:
+		for idx, sec in enumerate(sections):
+			doc = frappe.new_doc("Source Section")
+			doc.source_document = source_document
+			doc.parent_source_section = path_to_name.get(tuple(sec.hierarchy_path[:-1]))
+			doc.is_group = 1 if tuple(sec.hierarchy_path) in parent_paths else 0
+			doc.title = sec.title
+			doc.section_type = sec.section_type
+			doc.level = sec.level
+			doc.hierarchy_path = " > ".join(sec.hierarchy_path)
+			doc.page_start = sec.page_start
+			doc.page_end = sec.page_end
+			doc.sort_order = idx
+			doc.markdown = sec.markdown
+			doc.insert(ignore_permissions=True)
+			path_to_name[tuple(sec.hierarchy_path)] = doc.name
+	finally:
+		frappe.flags.wikify_skip_reindex = skip_reindex_was
+		# Queued even when an insert threw: the tree is already partly rewritten, and the
+		# per-row hook this replaces would have queued a rebuild for every row that landed.
+		# A document outside any project has nothing to scope an index to; it becomes
+		# searchable when it is assigned to one (which reindexes then).
+		project = (
+			None
+			if suspended_by_caller
+			else frappe.db.get_value("Source Document", source_document, "project")
+		)
+		if project:
+			events.queue_project_rebuild(project)
 
 	# 0.5: the tree (and its page spans) just changed wholesale — rebuild the
 	# document's reference edges against it. Runs after all inserts so every

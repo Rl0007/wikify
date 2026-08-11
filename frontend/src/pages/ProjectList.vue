@@ -12,7 +12,7 @@ import {
 	useCall,
 	useList,
 } from "frappe-ui";
-import { useIsMobile } from "@/composables/useIsMobile";
+import { useIsMobile } from "@/composables/useMediaQuery";
 import { actionButtonProps } from "@/utils/actionButton";
 import { clear as clearAgentContext } from "@/data/agentContext";
 

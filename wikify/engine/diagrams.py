@@ -200,17 +200,9 @@ def parse_flowchart(source: str) -> tuple[dict[str, str], list[tuple[str, str]],
 	return labels, edges, broken
 
 
-def syntax_errors(source: str) -> list[str]:
-	"""Everything that would stop this block parsing or rendering. Empty means it is safe."""
-	body = (source or "").strip()
-	if not body:
-		return ["empty diagram"]
-	header = body.splitlines()[0]
-	if not _HEADER_RE.match(header):
-		return [f"unsupported diagram type: {header.strip()[:40]!r}"]
-
+def syntax_errors(labels: dict[str, str], edges: list[tuple[str, str]], broken: list[str]) -> list[str]:
+	"""Everything that would stop a parsed block rendering. Empty means it is safe."""
 	errors: list[str] = []
-	labels, edges, broken = parse_flowchart(body)
 	if broken:
 		errors.append(f"unparseable statement: {broken[0][:60]!r}")
 	for node_id, label in labels.items():
@@ -220,8 +212,10 @@ def syntax_errors(source: str) -> list[str]:
 			errors.append(f"literal \\n in node {node_id} — mermaid needs <br>")
 	if not edges:
 		errors.append("no edges — a flowchart with no connections carries no structure")
-	elif len(components(labels, edges)) > 1:
-		errors.append(f"disconnected: {len(components(labels, edges))} unlinked fragments")
+		return errors
+	fragments = components(labels, edges)
+	if len(fragments) > 1:
+		errors.append(f"disconnected: {len(fragments)} unlinked fragments")
 	return errors
 
 
@@ -248,9 +242,8 @@ def components(labels: dict[str, str], edges: list[tuple[str, str]]) -> list[set
 	return found
 
 
-def tabular_signals(source: str) -> list[str]:
+def tabular_signals(labels: dict[str, str], edges: list[tuple[str, str]]) -> list[str]:
 	"""Signs this "flowchart" is really a grid whose row↔value binding has been lost."""
-	labels, edges, _ = parse_flowchart(source)
 	if not edges:
 		return []
 	children: dict[str, list[str]] = {}
@@ -291,8 +284,20 @@ def tabular_signals(source: str) -> list[str]:
 
 
 def diagram_errors(source: str) -> list[str]:
-	"""Every reason this mermaid block must not be stored."""
-	return syntax_errors(source) + tabular_signals(source)
+	"""Every reason this mermaid block must not be stored.
+
+	Parsed once for both verdicts: `remediate_pdf` runs this gate over every candidate of
+	every page, so a source that parsed itself twice per verdict cost up to nine parses a page.
+	"""
+	body = (source or "").strip()
+	if not body:
+		return ["empty diagram"]
+	header = body.splitlines()[0]
+	if not _HEADER_RE.match(header):
+		return [f"unsupported diagram type: {header.strip()[:40]!r}"]
+
+	labels, edges, broken = parse_flowchart(body)
+	return syntax_errors(labels, edges, broken) + tabular_signals(labels, edges)
 
 
 def has_table(markdown: str) -> bool:

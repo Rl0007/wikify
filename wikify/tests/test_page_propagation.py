@@ -89,8 +89,6 @@ class TestPagePropagation(FrappeTestCase):
 		page.canonical_markdown = markdown
 		page.save(ignore_permissions=True)
 
-	# --- the doc_event ------------------------------------------------------------------
-
 	def test_a_changed_page_marks_itself_dirty_and_queues_one_pass(self):
 		with doc_events_live(), patch("frappe.enqueue") as enqueue:
 			self.save_canonical(1, "canonical page 1 — surcharge slabs repaired")
@@ -125,8 +123,6 @@ class TestPagePropagation(FrappeTestCase):
 			add_page(self.source_document.name, 5, "canonical page 5")
 
 		enqueue.assert_not_called()
-
-	# --- the pass -----------------------------------------------------------------------
 
 	def test_the_pass_rebuilds_every_section_covering_a_changed_page(self):
 		marker = "SURCHARGE-MARKER-42"
@@ -214,20 +210,21 @@ class TestPagePropagation(FrappeTestCase):
 		self.assertTrue(frappe.cache().get_value(events.page_propagation_key(self.source_document.name)))
 		self.assertEqual(events.take_dirty_pages(self.source_document.name), [1])
 
-	# --- reaching the index -------------------------------------------------------------
+	def test_rebuilt_sections_are_pushed_into_the_index_in_one_batch(self):
+		"""`set_section_markdown` fires no doc_event, so the reindex hook never sees it.
 
-	def test_rebuilt_sections_are_pushed_into_the_index_one_by_one(self):
-		"""`set_section_markdown` fires no doc_event, so the reindex hook never sees it."""
-		with patch("wikify.rag.index.upsert_section") as upsert:
+		One call, not one per section: each `upsert_sections` rebuilds the whole FTS index.
+		"""
+		with patch("wikify.rag.index.upsert_sections") as upsert:
 			events.reindex_sections("PRJ-TEST", ["SEC-A", "SEC-B"])
 
-		self.assertEqual([call.args[0] for call in upsert.call_args_list], ["SEC-A", "SEC-B"])
+		upsert.assert_called_once_with(["SEC-A", "SEC-B"])
 
 	def test_a_wide_fanout_queues_one_project_rebuild_instead_of_a_burst_of_upserts(self):
 		many = [f"SEC-{n}" for n in range(events.PROJECT_REBUILD_FANOUT + 1)]
 
 		with (
-			patch("wikify.rag.index.upsert_section") as upsert,
+			patch("wikify.rag.index.upsert_sections") as upsert,
 			patch("wikify.rag.events.queue_project_rebuild") as queue_project,
 		):
 			events.reindex_sections("PRJ-TEST", many)
@@ -236,7 +233,7 @@ class TestPagePropagation(FrappeTestCase):
 		queue_project.assert_called_once_with("PRJ-TEST")
 
 	def test_a_document_outside_any_project_reindexes_nothing(self):
-		with patch("wikify.rag.index.upsert_section") as upsert:
+		with patch("wikify.rag.index.upsert_sections") as upsert:
 			events.reindex_sections(None, ["SEC-A"])
 
 		upsert.assert_not_called()

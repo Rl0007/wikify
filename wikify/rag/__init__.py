@@ -1,6 +1,6 @@
 """Retrieval core for the RAG POC — chunking, embedding, LanceDB storage and search.
 
-Layout mirrors the frozen contract in `specs/poc-rag-CONTRACT.md`:
+Layout:
 
 - `embed`  — model2vec static embeddings (256-dim, numpy-only, no API key).
 - `store`  — the LanceDB connection + the single `chunks` table (explicit pyarrow schema).

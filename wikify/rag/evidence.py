@@ -367,30 +367,60 @@ def resolve_page(text: str, page_index: list[tuple[int, set, str]], fallback_pag
 	return {"page_no": best_page, "page_approximate": False, "page_score": round(best_score, 4)}
 
 
-def get_pages_by_document(document_names: list[str], page_numbers: list[int]) -> dict[str, list[dict]]:
-	"""Source Pages for the cited documents, one query per batch — never per citation."""
-	documents = [name for name in dict.fromkeys(document_names) if name]
-	numbers = sorted({number for number in page_numbers if number})
-	if not documents or not numbers:
-		return {}
+def get_rows_by_name(doctype: str, names: list[str], fields: list[str]) -> list[dict]:
+	"""`get_all` over a name list, sliced into batches — one query per batch, no N+1.
 
+	Lives here rather than next to either caller because `chunk` imports this module, so
+	this is the lowest point in the retrieval stack both sides can reach.
+	"""
+	unique = [name for name in dict.fromkeys(names) if name]
 	rows: list[dict] = []
-	for start in range(0, len(documents), BATCH_SIZE):
+	for start in range(0, len(unique), BATCH_SIZE):
 		rows.extend(
 			frappe.get_all(
-				"Source Page",
-				filters={
-					"source_document": ["in", documents[start : start + BATCH_SIZE]],
-					"page_no": ["in", numbers],
-				},
-				fields=PAGE_FIELDS,
-				order_by="page_no asc",
+				doctype, filters={"name": ["in", unique[start : start + BATCH_SIZE]]}, fields=fields
 			)
 		)
+	return rows
+
+
+def get_pages_by_document(
+	document_names: list[str], page_numbers: list[int] | None = None
+) -> dict[str, list[dict]]:
+	"""Source Pages for the given documents, grouped — one query per batch, never per row.
+
+	`page_numbers` narrows the scan to the pages the caller will actually read; omit it for
+	every page of each document. An empty page list is a real answer ("no pages wanted"),
+	so it returns nothing rather than falling through to the whole document.
+	"""
+	documents = [name for name in dict.fromkeys(document_names) if name]
+	numbers = None if page_numbers is None else sorted({number for number in page_numbers if number})
+	if not documents or numbers == []:
+		return {}
+
 	grouped: dict[str, list[dict]] = {}
-	for row in rows:
-		grouped.setdefault(row["source_document"], []).append(row)
+	for start in range(0, len(documents), BATCH_SIZE):
+		filters: dict = {"source_document": ["in", documents[start : start + BATCH_SIZE]]}
+		if numbers is not None:
+			filters["page_no"] = ["in", numbers]
+		for row in frappe.get_all("Source Page", filters=filters, fields=PAGE_FIELDS, order_by="page_no asc"):
+			grouped.setdefault(row["source_document"], []).append(row)
 	return grouped
+
+
+def page_line_span(text: str, pages: list[dict], page_no: int) -> tuple[int, int]:
+	"""Where `text` sits on one page of a document, as (line start, line end).
+
+	(0, 0) when the page is not in `pages` or the text cannot be located on it — an
+	unresolved span is reported as unknown, never guessed.
+	"""
+	for page in pages:
+		if page["page_no"] != page_no:
+			continue
+		located = locate_quote(text, page)
+		if located["found"]:
+			return located["line_start"], located["line_end"]
+	return 0, 0
 
 
 def page_range(citation: dict) -> list[int]:
@@ -431,13 +461,7 @@ def check_quote(quote: str, citation: dict, pages_by_document: dict[str, list[di
 	if result["page_approximate"]:
 		return result
 
-	for page in pages:
-		if page["page_no"] != result["page_no"]:
-			continue
-		on_page = locate_quote(quote, page)
-		if on_page["found"]:
-			result["page_line_start"] = on_page["line_start"]
-			result["page_line_end"] = on_page["line_end"]
+	result["page_line_start"], result["page_line_end"] = page_line_span(quote, pages, result["page_no"])
 	return result
 
 

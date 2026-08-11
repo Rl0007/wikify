@@ -31,13 +31,14 @@ from wikify.rag import index as rag_index
 from wikify.rag.search import Hit
 
 # The headline the POC is demonstrated on: 15 job descriptions across 5 documents, of which
-# a naive top-8 vector search can physically return at most 8. See specs/poc-rag-DEMO-DATA.md, G1.
+# a naive top-8 vector search can physically return at most 8. Golden question G1 in
+# `wikify.rag.eval.GOLDEN_QUESTIONS` asks for exactly this set.
 G1_EXPECTED_SOURCES = 15
 G1_NAIVE_LIMIT = 8
 
 # The demoed headline and golden question G1 ask the same thing in different words, and a
 # vector search is sensitive to exactly that: the demo phrasing ("...across all the
-# documents") puts 6 job descriptions in the naive top-8, G1's spec phrasing ("...across all
+# documents") puts 6 job descriptions in the naive top-8, G1's phrasing ("...across all
 # the PDFs") puts 5. Both are asserted, separately and by their own wording — averaging them
 # or asserting one number for both would hide a real ranking change behind a rounded mean.
 HEADLINE_QUERY = "give me all the job descriptions across all the documents"
@@ -145,7 +146,7 @@ class TestGoldenQuestions(IntegrationTestCase):
 		cls.results = None
 		if not cls.project:
 			return
-		if not rag_index.index_stats(cls.project)["chunks"]:
+		if not rag_index.index_stats([cls.project])["chunks"]:
 			cls.project = None
 			return
 		if not settings.openrouter_key():

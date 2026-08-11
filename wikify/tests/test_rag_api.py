@@ -28,7 +28,12 @@ from wikify.rag import usage as rag_usage
 from wikify.rag.search import Hit
 
 
-def make_hit(title: str = "Backend Engineer", score: float = 0.03, rerank_score: float | None = None) -> Hit:
+def make_hit(
+	title: str = "Backend Engineer",
+	score: float = 0.03,
+	rerank_score: float | None = None,
+	vector_score: float | None = None,
+) -> Hit:
 	return Hit(
 		chunk_id=f"{title}::0",
 		section=f"sec-{title}",
@@ -43,6 +48,7 @@ def make_hit(title: str = "Backend Engineer", score: float = 0.03, rerank_score:
 		wiki_route=None,
 		score=score,
 		rerank_score=rerank_score,
+		vector_score=vector_score,
 	)
 
 
@@ -228,7 +234,7 @@ class TestRagApi(FrappeTestCase):
 		decided = rag_router.Route("exhaustive", "job_description", "all job descriptions", "r")
 		with (
 			patch.object(rag_search, "search", return_value=naive_hits) as search,
-			patch.object(api_rag, "route_question", return_value=decided),
+			patch.object(rag_answer, "route", return_value=decided),
 			patch.object(rag_answer, "retrieve", return_value=routed_hits),
 		):
 			result = api_rag.compare("all the job descriptions")
@@ -244,14 +250,16 @@ class TestRagApi(FrappeTestCase):
 		self.assertEqual(enqueue.call_args.kwargs["queue"], "long")
 		self.assertEqual(enqueue.call_args.args[0], "wikify.rag.index.rebuild_project")
 
-	def test_index_status_reports_only_readable_projects(self):
-		stats = {"chunks": 3, "sections": 2, "documents": 1, "indexed_at": "2026-01-01 00:00:00", "dim": 256}
+	def test_index_status_scans_the_readable_projects_once(self):
+		"""One scan for the whole readable scope — not one per project."""
+		stats = {"chunks": 6, "sections": 4, "documents": 2, "indexed_at": "2026-01-01 00:00:00", "dim": 256}
 		with (
 			patch.object(api_rag, "readable_projects", return_value=["a", "b"]),
-			patch.object(api_rag.rag_index, "index_stats", return_value=stats),
+			patch.object(api_rag.rag_index, "index_stats", return_value=stats) as index_stats,
 			patch.object(api_rag, "is_stale", return_value=False),
 		):
 			result = api_rag.index_status()
+		index_stats.assert_called_once_with(["a", "b"])
 		self.assertEqual(result["chunks"], 6)
 		self.assertEqual(result["sections"], 4)
 		self.assertFalse(result["stale"])
@@ -497,11 +505,13 @@ class TestAskCost(FrappeTestCase):
 
 
 class TestSilentRerankFailure(FrappeTestCase):
-	"""A reranker that answers but ranks nothing must never produce a refusal.
+	"""The reranker must never be able to mute the product on its own.
 
 	Graded against the real corpus: "what are the slab rates under section 115BAC(1A)" is
 	answered at rank 2 by both the hybrid and the FTS leg, yet `ask` refused it because the
-	rerank call came back with 0.0 for all eight candidates.
+	rerank scored every candidate 0.0. Refusing on that alone is the worst thing this system
+	does when it is wrong — a reader cannot tell "the reranker died" from "the document does
+	not cover this" — so a below-floor rerank now needs the embedding leg to agree.
 	"""
 
 	QUESTION = "what are the slab rates under section 115BAC(1A)"
@@ -510,48 +520,75 @@ class TestSilentRerankFailure(FrappeTestCase):
 		items = [{"id": position, "score": score} for position, score in enumerate(scores)]
 		return llm_reply(frappe.as_json({"scores": items}))
 
-	def retrieved(self) -> list[Hit]:
-		return [make_hit("I. INCOME TAX RATES"), make_hit("II. SURCHARGE")]
+	def retrieved(self, vector_score: float | None = None) -> list[Hit]:
+		return [
+			make_hit("I. INCOME TAX RATES", vector_score=vector_score),
+			make_hit("II. SURCHARGE", vector_score=vector_score),
+		]
 
-	def test_an_all_zero_verdict_keeps_the_fusion_order(self):
+	def rerank(self, scores: list[float], vector_score: float | None = None) -> list[Hit]:
 		with (
 			patch("wikify.engine.llm.has_openrouter", return_value=True),
-			patch("wikify.engine.llm.chat_completion", return_value=self.rerank_reply([0.0, 0.0])),
+			patch("wikify.engine.llm.chat_completion", return_value=self.rerank_reply(scores)),
 		):
-			hits = rag_search.rerank_hits(self.QUESTION, self.retrieved())
+			return rag_search.rerank_hits(self.QUESTION, self.retrieved(vector_score))
 
-		self.assertEqual([hit.title for hit in hits], ["I. INCOME TAX RATES", "II. SURCHARGE"])
-		self.assertEqual([hit.rerank_score for hit in hits], [None, None])
-
-	def test_a_real_ranking_still_reorders(self):
-		with (
-			patch("wikify.engine.llm.has_openrouter", return_value=True),
-			patch("wikify.engine.llm.chat_completion", return_value=self.rerank_reply([2.0, 9.0])),
-		):
-			hits = rag_search.rerank_hits(self.QUESTION, self.retrieved())
-
-		self.assertEqual([hit.title for hit in hits], ["II. SURCHARGE", "I. INCOME TAX RATES"])
-
-	def test_the_answer_is_not_refused_when_the_reranker_ranks_nothing(self):
-		"""End to end over the real rerank path: a flat verdict must still answer."""
+	def answer_over_the_rerank_path(self, scores: list[float], vector_score: float | None) -> dict:
+		"""End to end through the real rerank path, with only the store and the synthesis stubbed."""
 
 		def retrieve_and_rerank(query, **kwargs):
-			return rag_search.rerank_hits(query, self.retrieved())
+			return rag_search.rerank_hits(query, self.retrieved(vector_score))
 
 		with (
 			patch.object(settings, "openrouter_key", return_value="key"),
 			patch("wikify.engine.llm.has_openrouter", return_value=True),
-			patch("wikify.engine.llm.chat_completion", return_value=self.rerank_reply([0.0, 0.0])),
+			patch("wikify.engine.llm.chat_completion", return_value=self.rerank_reply(scores)),
 			patch.object(rag_search, "search", side_effect=retrieve_and_rerank),
 			patch.object(rag_answer, "generate", return_value="The slabs are ... [1]"),
 		):
-			result = rag_answer.answer(self.QUESTION, rerank=True, allowed_projects=["PRJ"])
+			return rag_answer.answer(self.QUESTION, rerank=True, allowed_projects=["PRJ"])
+
+	def test_an_all_zero_verdict_keeps_the_fusion_order(self):
+		"""Zero for everything separates nothing, so the fusion order has to survive it."""
+		hits = self.rerank([0.0, 0.0])
+		self.assertEqual([hit.title for hit in hits], ["I. INCOME TAX RATES", "II. SURCHARGE"])
+
+	def test_an_identical_non_zero_verdict_is_discarded(self):
+		"""One repeated score is the model declining to judge — not a ranking, not a refusal."""
+		hits = self.rerank([5.0, 5.0])
+		self.assertEqual([hit.rerank_score for hit in hits], [None, None])
+
+	def test_a_real_ranking_still_reorders(self):
+		hits = self.rerank([2.0, 9.0])
+		self.assertEqual([hit.title for hit in hits], ["II. SURCHARGE", "I. INCOME TAX RATES"])
+
+	def test_the_answer_is_not_refused_when_the_reranker_zeroes_a_hit_the_corpus_answers(self):
+		"""The 115BAC casualty: an all-zero rerank over a section the embedding leg matched
+		strongly must fall back to the fusion order and answer, never refuse."""
+		result = self.answer_over_the_rerank_path([0.0, 0.0], vector_score=0.61)
 
 		self.assertFalse(result["refused"])
 		self.assertEqual(len(result["citations"]), 2)
 
+	def test_an_overruled_rerank_reports_no_score_rather_than_zero(self):
+		"""The scores are known-bad once the embedding leg overrules them, and `null` is what
+		the source card hides on — a "rerank 0.0" chip reads as a dead reranker."""
+		result = self.answer_over_the_rerank_path([0.0, 0.0], vector_score=0.61)
+
+		self.assertTrue(all(citation["rerank_score"] is None for citation in result["citations"]))
+
+	def test_a_genuinely_uncovered_question_is_still_refused(self):
+		"""Both legs agree there is nothing here, so the honest answer is still to refuse."""
+		result = self.answer_over_the_rerank_path([0.0, 0.0], vector_score=0.39)
+
+		self.assertTrue(result["refused"])
+		self.assertEqual(result["citations"], [])
+
 	def test_a_working_reranker_can_still_refuse(self):
-		weak = [make_hit(rerank_score=1.0), make_hit("Other", rerank_score=0.5)]
+		weak = [
+			make_hit(rerank_score=1.0, vector_score=0.31),
+			make_hit("Other", rerank_score=0.5, vector_score=0.30),
+		]
 		with patch.object(rag_search, "search", return_value=weak):
 			result = rag_answer.answer("what is the capital of Mongolia", allowed_projects=["PRJ"])
 

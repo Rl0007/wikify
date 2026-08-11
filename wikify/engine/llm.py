@@ -49,13 +49,18 @@ def chat_completion(
 	response_format: dict | None = None,
 	max_tokens: int | None = None,
 	timeout: int = 120,
+	api_key: str = "",
 ) -> dict:
 	"""POST a chat completion to OpenRouter, recording latency + token cost.
 
 	Returns the parsed JSON response body (same shape as the OpenAI chat API, so
 	callers read `resp["choices"][0]["message"]["content"]`).
+
+	`api_key` is for callers running this on a worker thread: resolving the key reads
+	`Wikify Settings`, and `frappe.local` is unbound off the request thread, so the caller
+	resolves it once up front and hands it down. Omit it and it is resolved here as usual.
 	"""
-	key = settings.openrouter_key()
+	key = api_key or settings.openrouter_key()
 	if not key:
 		raise RuntimeError("OPENROUTER key not set; cloud features unavailable.")
 

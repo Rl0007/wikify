@@ -2,9 +2,9 @@
 // /ask — ask a question of the indexed wiki. Sources land before the answer (they are
 // published first), the routing decision is shown up front, and citation chips in the
 // answer jump to the source they came from.
-import { computed, nextTick, ref } from "vue";
-import { marked } from "marked";
+import { computed, nextTick, onUnmounted, ref, watch } from "vue";
 import { Button, FormControl, PageHeader } from "frappe-ui";
+import MarkdownPreview from "@/components/MarkdownPreview.vue";
 import CostMeter from "@/components/rag/CostMeter.vue";
 import RouteBadge from "@/components/rag/RouteBadge.vue";
 import SourceCard from "@/components/rag/SourceCard.vue";
@@ -42,17 +42,39 @@ const elapsed = computed(() =>
 	tookMs.value >= 1000 ? `${(tookMs.value / 1000).toFixed(1)} s` : `${tookMs.value} ms`,
 );
 
+// The answer streams a token at a time, and every delta would otherwise re-parse the whole
+// accumulated markdown. Rendering trails the text by one 50 ms tick — below the cadence a
+// reader can see, but it collapses hundreds of full re-parses into a handful.
+const RENDER_INTERVAL_MS = 50;
+// Seeded from the answer already in module state: a remount mid-read must show it at
+// once, not blank to "No answer returned" until the first tick lands.
+const renderedText = ref(answerText.value);
+let renderTimer = null;
+
+watch(answerText, (text) => {
+	if (!text) {
+		clearTimeout(renderTimer);
+		renderTimer = null;
+		renderedText.value = "";
+		return;
+	}
+	if (renderTimer) return;
+	renderTimer = setTimeout(() => {
+		renderTimer = null;
+		renderedText.value = answerText.value;
+	}, RENDER_INTERVAL_MS);
+});
+
+onUnmounted(() => clearTimeout(renderTimer));
+
 // Citation markers `[1]` become clickable chips that scroll to their source card.
-const answerHtml = computed(() => {
-	const markdown = answerText.value || "";
-	if (!markdown) return "";
-	const rendered = marked.parse(markdown, { async: false });
+function addCitationChips(rendered) {
 	return rendered.replace(
 		/\[(\d+)\]/g,
 		(match, number) =>
 			`<button type="button" class="rag-citation" data-citation="${number}">${number}</button>`,
 	);
-});
+}
 
 async function scrollToSource(index) {
 	highlightedSource.value = index;
@@ -129,12 +151,10 @@ function handleAnswerClick(event) {
 			The connection dropped mid-answer — showing everything that streamed in.
 		</p>
 
-		<!-- The routing decision, up front -->
 		<div v-if="hasResult && (route || streaming)" class="mt-4">
 			<RouteBadge :route="route" :loading="streaming && !route" />
 		</div>
 
-		<!-- Nothing asked yet -->
 		<div
 			v-if="!hasResult && !failed"
 			class="mt-10 flex flex-col items-center gap-3 rounded-lg border border-dashed border-outline-gray-2 px-6 py-16 text-center"
@@ -188,7 +208,6 @@ function handleAnswerClick(event) {
 				</div>
 			</section>
 
-			<!-- Answer -->
 			<section class="order-1 min-w-0 lg:order-2 lg:col-span-7">
 				<div class="mb-2 flex flex-wrap items-center gap-x-3 gap-y-1">
 					<h2 class="text-base font-medium text-ink-gray-9">Answer</h2>
@@ -222,11 +241,12 @@ function handleAnswerClick(event) {
 				</div>
 
 				<div
-					v-else-if="answerHtml"
-					class="rag-answer prose prose-sm dark:prose-invert max-w-none rounded-lg border border-outline-gray-2 bg-surface-elevation-1 px-4 py-4"
+					v-else-if="renderedText"
+					class="rag-answer rounded-lg border border-outline-gray-2 bg-surface-elevation-1 px-4 py-4"
 					@click="handleAnswerClick"
-					v-html="answerHtml"
-				/>
+				>
+					<MarkdownPreview :content="renderedText" :decorate="addCitationChips" />
+				</div>
 
 				<!-- "No answer returned" is only true when the request completed and the
 				     model said nothing. If the connection dropped, the answer was lost in

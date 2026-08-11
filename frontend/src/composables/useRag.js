@@ -6,7 +6,7 @@ import { useCall, useList } from "frappe-ui";
 import { useSocket } from "@/socket";
 
 // `ask` streams over one shared channel and tags every payload with the session it
-// belongs to (see the contract), unlike the agent loop's `wikify_agent_*:<sid>` events.
+// belongs to, unlike the agent loop's per-session `wikify_agent_*:<sid>` events.
 const ANSWER_CHANNEL = "wikify_rag_answer";
 
 function newSessionId() {
@@ -76,28 +76,29 @@ export function useProjectOptions() {
 // Kept at module scope, not per-instance: the layout remounts these pages on a viewport
 // breakpoint change, and a remount must not throw away the question, the project scope or
 // the results the user is reading.
-const askState = {
-	question: ref(""),
-	project: ref(""),
-	askedQuestion: ref(""),
-	sources: ref([]),
-	answerText: ref(""),
-	route: ref(null),
-	refused: ref(false),
-	tookMs: ref(null),
-	errorText: ref(""),
-	// Spend on the last answer, and the running total for this browser session. The
-	// backend may not report cost yet, so these stay null until a payload carries them
-	// rather than defaulting to a zero that would read as "free".
-	usage: ref(null),
-	sessionCost: ref(0),
-	// True when the request never reached the server, so nothing was retrieved. The page
-	// must then show the failure alone — empty "Sources 0 / No answer" panels would claim
-	// a search happened and came back empty.
-	failed: ref(false),
-	streaming: ref(false),
-	sessionId: ref(null),
-};
+const question = ref("");
+const project = ref("");
+const askedQuestion = ref("");
+const sources = ref([]);
+const answerText = ref("");
+const route = ref(null);
+const refused = ref(false);
+const tookMs = ref(null);
+const errorText = ref("");
+// Spend on the last answer, and the running total for this browser session. The backend
+// may not report cost yet, so these stay null until a payload carries them rather than
+// defaulting to a zero that would read as "free".
+const usage = ref(null);
+const sessionCost = ref(0);
+const streaming = ref(false);
+const sessionId = ref(null);
+
+// True when the request failed and nothing was retrieved. The page must then show the
+// failure alone — empty "Sources 0 / No answer" panels would claim a search happened and
+// came back empty.
+const failed = computed(
+	() => Boolean(errorText.value) && !sources.value.length && !answerText.value,
+);
 
 // The request itself is module state too, and for a stronger reason than the results:
 // `useCall` aborts its in-flight fetch whenever it is re-executed, and a component-scoped
@@ -110,23 +111,6 @@ const askCall = useCall({
 	method: "POST",
 	immediate: false,
 });
-
-const {
-	question,
-	project,
-	askedQuestion,
-	sources,
-	answerText,
-	route,
-	refused,
-	tookMs,
-	errorText,
-	failed,
-	usage,
-	sessionCost,
-	streaming,
-	sessionId,
-} = askState;
 
 function handleAnswerEvent(payload) {
 	// Strict match: realtime is per-user, not per-tab, so another tab's (or another
@@ -161,7 +145,6 @@ function reset() {
 	refused.value = false;
 	tookMs.value = null;
 	errorText.value = "";
-	failed.value = false;
 	usage.value = null;
 }
 
@@ -180,7 +163,6 @@ async function ask() {
 		});
 		if (askCall.error) {
 			errorText.value = errorMessage(askCall.error);
-			failed.value = !sources.value.length && !answerText.value;
 			return;
 		}
 		if (!response) return;

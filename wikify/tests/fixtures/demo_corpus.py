@@ -1,4 +1,4 @@
-"""Repeatable demo corpus for the RAG POC (`specs/poc-rag-CONTRACT.md`).
+"""Repeatable demo corpus for the RAG POC.
 
 Five healthcare-provider manuals whose sections deliberately **overlap in type**: each
 document carries three job descriptions, a compensation/benefits section, a
@@ -33,8 +33,6 @@ from wikify.seed import seed_section_types
 PROJECT_NAME = "Demo Corpus"
 SPACE_NAME = "Demo Corpus"
 SPACE_ROUTE = "demo-corpus"
-
-# --- Northfield General Hospital — Nursing Services Manual ---
 
 NORTHFIELD_OVERVIEW = """# Hospital Overview and Mission
 
@@ -238,8 +236,6 @@ Any pressure damage of category two or above acquired after admission is reporte
 incident on the day it is identified, triggers a review by the tissue viability nurse
 within one working day, and is included in the ward's monthly harm-free care report.
 """
-
-# --- Riverside Community Clinic — Staff Handbook ---
 
 RIVERSIDE_OVERVIEW = """# Who We Are: Riverside Community Clinic
 
@@ -446,8 +442,6 @@ changed and why. Discharge summaries mentioning a high-risk medicine — anticoa
 insulin, methotrexate, lithium or opioids — are prioritised the same day.
 """
 
-# --- St Aubyn Maternity Unit — Operational Policy Manual ---
-
 AUBYN_OVERVIEW = """# St Aubyn Maternity Unit at a Glance
 
 St Aubyn Maternity Unit is a consultant-led maternity service co-located with an alongside
@@ -646,8 +640,6 @@ further authorisation. Transfer to theatre for examination under anaesthesia is 
 without delay where the cause is not controlled. A structured debrief with the woman and
 with the team is held within seventy-two hours.
 """
-
-# --- Lakeside Surgical Centre — Theatre Operations Manual ---
 
 LAKESIDE_OVERVIEW = """# Lakeside Surgical Centre: Purpose and Services
 
@@ -852,8 +844,6 @@ searched, and if the item is still unaccounted for an intra-operative radiograph
 before the patient leaves the theatre.
 """
 
-# --- Meridian Home Care Services — Employee Policy and Roles Manual ---
-
 MERIDIAN_OVERVIEW = """# Meridian Home Care: Company Overview
 
 Meridian Home Care Services is an independent domiciliary care provider supporting around
@@ -1057,7 +1047,6 @@ request from the person or a worker. Every review records what changed, what sta
 same, and who agreed it.
 """
 
-# --- corpus layout ---
 # Each section is (title, level, hierarchy_path, page_start, page_end, section_type, markdown).
 # Groups carry no body and no type: the wiki generator gives them a Contents rollup, and
 # leaving them untyped keeps a `section_type` filter returning exactly the leaf sections.

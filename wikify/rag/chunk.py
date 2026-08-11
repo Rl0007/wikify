@@ -33,10 +33,6 @@ CONTEXT_SEPARATOR = " \u203a "  # " > " re-typeset for the breadcrumb prefix
 CHUNK_TARGET_CHARS = 1200
 CHUNK_OVERLAP_CHARS = 150
 
-# Sections are read in slices so a project with thousands of them can't build an
-# `IN (...)` list the database refuses (and so memory stays bounded).
-BATCH_SIZE = 500
-
 SECTION_FIELDS = [
 	"name",
 	"source_document",
@@ -75,16 +71,6 @@ class Chunk:
 	# A breadcrumb section whose body lives in its children: it is indexed so exhaustive
 	# filter mode can still return it, and kept out of the similarity legs (see `search`).
 	title_only: bool = False
-
-
-def get_rows_by_name(doctype: str, names: list[str], fields: list[str]) -> list[dict]:
-	"""`get_all` over a name list, sliced into batches — one query per batch, no N+1."""
-	unique = [name for name in dict.fromkeys(names) if name]
-	rows: list[dict] = []
-	for start in range(0, len(unique), BATCH_SIZE):
-		batch = unique[start : start + BATCH_SIZE]
-		rows.extend(frappe.get_all(doctype, filters={"name": ["in", batch]}, fields=fields))
-	return rows
 
 
 def is_heading(block: str) -> bool:
@@ -225,22 +211,14 @@ def contextual_prefix(document_title: str, hierarchy_path: str) -> str:
 	return CONTEXT_SEPARATOR.join(crumbs)
 
 
-def get_pages_by_document(document_names: list[str]) -> dict[str, list[dict]]:
-	"""Every parsed page of the given documents, grouped — one query per batch, no N+1."""
-	pages: dict[str, list[dict]] = {}
-	for row in get_rows_by_name("Source Document", document_names, ["name"]):
-		pages.setdefault(row["name"], [])
-	names = list(pages)
-	for start in range(0, len(names), BATCH_SIZE):
-		batch = frappe.get_all(
-			"Source Page",
-			filters={"source_document": ["in", names[start : start + BATCH_SIZE]]},
-			fields=["source_document", "page_no", "canonical_markdown"],
-			order_by="page_no asc",
-		)
-		for row in batch:
-			pages[row["source_document"]].append(row)
-	return pages
+def section_pages(rows: list[dict]) -> list[int]:
+	"""Every page number the given section rows declare — the pages provenance will read."""
+	wanted: set[int] = set()
+	for row in rows:
+		start = int(row.get("page_start") or 0)
+		if start:
+			wanted.update(range(start, max(start, int(row.get("page_end") or start)) + 1))
+	return sorted(wanted)
 
 
 def section_page_index(row: dict, pages: list[dict]) -> list[tuple[int, set]]:
@@ -267,13 +245,9 @@ def resolve_provenance(piece: str, markdown: str, row: dict, page_index, pages: 
 	}
 	if resolved["page_approximate"]:
 		return provenance
-	for page in pages:
-		if page["page_no"] != resolved["page_no"]:
-			continue
-		on_page = evidence.locate_quote(piece, page)
-		if on_page["found"]:
-			provenance["page_line_start"] = on_page["line_start"]
-			provenance["page_line_end"] = on_page["line_end"]
+	provenance["page_line_start"], provenance["page_line_end"] = evidence.page_line_span(
+		piece, pages, resolved["page_no"]
+	)
 	return provenance
 
 
@@ -336,7 +310,7 @@ def resolve_context(rows: list[dict]) -> tuple[dict[str, dict], dict[str, str]]:
 	"""(documents by name, wiki route by Wiki Document name) for a batch of section rows."""
 	documents = {
 		document["name"]: document
-		for document in get_rows_by_name(
+		for document in evidence.get_rows_by_name(
 			"Source Document",
 			[row["source_document"] for row in rows],
 			["name", "title", "project"],
@@ -344,7 +318,7 @@ def resolve_context(rows: list[dict]) -> tuple[dict[str, dict], dict[str, str]]:
 	}
 	wiki_routes = {
 		page["name"]: page["route"]
-		for page in get_rows_by_name(
+		for page in evidence.get_rows_by_name(
 			"Wiki Document",
 			[row.get("wiki_document") for row in rows],
 			["name", "route"],
@@ -353,12 +327,23 @@ def resolve_context(rows: list[dict]) -> tuple[dict[str, dict], dict[str, str]]:
 	return documents, wiki_routes
 
 
-def chunks_for_section(section_name: str) -> list[Chunk]:
-	rows = frappe.get_all("Source Section", filters={"name": section_name}, fields=SECTION_FIELDS)
+def chunks_for_sections(section_names: list[str]) -> list[Chunk]:
+	"""Chunks for a batch of sections, reading each document's pages once for the whole batch.
+
+	Per-section chunking used to re-read every page of the parent document once per section,
+	so a ten-section propagation pass over a 236-page manual loaded 2,360 page rows to use
+	a couple of dozen. Only the pages the batch's sections declare are fetched.
+	"""
+	rows = evidence.get_rows_by_name("Source Section", section_names, SECTION_FIELDS)
 	if not rows:
 		return []
 	documents, wiki_routes = resolve_context(rows)
-	return build_chunks(rows, documents, wiki_routes, get_pages_by_document([rows[0]["source_document"]]))
+	pages = evidence.get_pages_by_document([row["source_document"] for row in rows], section_pages(rows))
+	return build_chunks(rows, documents, wiki_routes, pages)
+
+
+def chunks_for_section(section_name: str) -> list[Chunk]:
+	return chunks_for_sections([section_name])
 
 
 def chunks_for_project(project: str) -> list[Chunk]:
@@ -375,7 +360,7 @@ def chunks_for_project(project: str) -> list[Chunk]:
 	if not rows:
 		return []
 	documents, wiki_routes = resolve_context(rows)
-	return build_chunks(rows, documents, wiki_routes, get_pages_by_document(document_names))
+	return build_chunks(rows, documents, wiki_routes, evidence.get_pages_by_document(document_names))
 
 
 def chunk_row(item: Chunk, vector: list[float]) -> dict:

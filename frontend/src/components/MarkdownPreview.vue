@@ -8,10 +8,16 @@ import { renderMermaidIn } from "@/utils/mermaid";
 
 const props = defineProps({
 	content: { type: String, default: "" },
+	// Optional post-processor over the rendered markup, for callers that inject their own
+	// interactive markup into the answer (Ask turns `[1]` markers into citation chips).
+	decorate: { type: Function, default: null },
 });
 
 const container = ref(null);
-const html = computed(() => marked.parse(props.content || "", { async: false }));
+const html = computed(() => {
+	const rendered = marked.parse(props.content || "", { async: false });
+	return props.decorate ? props.decorate(rendered) : rendered;
+});
 
 async function renderDiagrams() {
 	await nextTick();

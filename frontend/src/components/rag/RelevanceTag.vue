@@ -16,7 +16,7 @@ const props = defineProps({
 	rank: { type: Number, default: null },
 	total: { type: Number, default: 0 },
 	score: { type: Number, default: null },
-	basis: { type: String, default: "hybrid" }, // exhaustive | hybrid | vector | fts
+	basis: { type: String, default: "hybrid" }, // exhaustive | hybrid | vector
 	// Set when every hit in the list shares one score, whatever the route said it was.
 	unrankedSet: { type: Boolean, default: false },
 });
@@ -39,12 +39,6 @@ const BASES = {
 		icon: "lucide-brain",
 		chip: "bg-surface-gray-3 text-ink-gray-8",
 		hint: "Position by embedding similarity to the question. A rank within these results, not a confidence score.",
-	},
-	fts: {
-		label: "keyword rank",
-		icon: "lucide-type",
-		chip: "bg-surface-gray-3 text-ink-gray-8",
-		hint: "Position by full-text (BM25) keyword match. A rank within these results, not a confidence score.",
 	},
 };
 

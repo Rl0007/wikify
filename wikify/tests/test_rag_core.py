@@ -16,6 +16,7 @@ The load-bearing assertions:
   - rerank degrades to unreranked results instead of breaking the search path.
 """
 
+import re
 import shutil
 import tempfile
 from unittest.mock import patch
@@ -26,6 +27,50 @@ from frappe.tests.utils import FrappeTestCase
 from wikify.engine import store as engine_store
 from wikify.engine.loader.sectionizer import Section
 from wikify.rag import chunk, index, search, store
+
+CANDIDATE_HEADER = re.compile(r"^\[(\d+)\] ", re.MULTILINE)
+
+
+def candidate_ids(messages: list[dict]) -> list[int]:
+	"""The candidate numbers a rerank prompt actually offered the model."""
+	return [int(number) for number in CANDIDATE_HEADER.findall(messages[1]["content"])]
+
+
+def rerank_favouring(crumb: str):
+	"""A reranker that scores the candidate whose breadcrumb is `crumb` 9.0 and everything
+	else 0.0, batch by batch — so a `search` that quietly re-sorts by fusion score fails."""
+
+	def reply(model, messages, **kwargs):
+		content = messages[1]["content"]
+		headers = [
+			(int(match.group(1)), content[match.end() : content.index("\n", match.end())])
+			for match in CANDIDATE_HEADER.finditer(content)
+		]
+		scores = [
+			{"id": number, "score": 9.0 if header.endswith(crumb) else 0.0} for number, header in headers
+		]
+		return {"choices": [{"message": {"content": frappe.as_json({"scores": scores})}}]}
+
+	return reply
+
+
+def make_bare_hit(title: str, score: float = 0.03) -> search.Hit:
+	"""A Hit with no store behind it — for the rerank paths, which only read title and text."""
+	return search.Hit(
+		chunk_id=f"{title}::0",
+		section=f"sec-{title}",
+		source_document="doc-1",
+		document_title="Handbook",
+		title=title,
+		text=f"{title} body text.",
+		section_type=None,
+		hierarchy_path=title,
+		page_start=1,
+		page_end=1,
+		wiki_route=None,
+		score=score,
+	)
+
 
 RECIPE_SECTIONS = [
 	("Coin recipe", "job_description", "Touch the coin and the score goes up by one point."),
@@ -154,8 +199,6 @@ class TestRagCore(FrappeTestCase):
 		)
 		index.rebuild_project(project)
 		return document
-
-	# --- chunking ---------------------------------------------------------------------
 
 	def test_embed_text_carries_context_prefix_and_text_stays_clean(self):
 		chunks = chunk.chunks_for_section(self.section_named("Coin recipe"))
@@ -307,15 +350,13 @@ class TestRagCore(FrappeTestCase):
 		self.assertEqual(chunk.chunks_for_section(section)[0].wiki_route, "handbook/coin-recipe")
 		self.assertIsNone(chunk.chunks_for_section(self.section_named("Timer recipe"))[0].wiki_route)
 
-	# --- indexing ---------------------------------------------------------------------
-
 	def test_rebuild_is_idempotent_and_drops_orphans(self):
 		first = index.rebuild_project(self.project.name)
 		second = index.rebuild_project(self.project.name)
 		self.assertEqual(first["chunks"], second["chunks"])
 		self.assertEqual(first["sections"], 3)
 
-		stats = index.index_stats(self.project.name)
+		stats = index.index_stats([self.project.name])
 		self.assertEqual(stats["chunks"], first["chunks"])
 		self.assertEqual(stats["sections"], 3)
 		self.assertEqual(stats["documents"], 1)
@@ -324,7 +365,7 @@ class TestRagCore(FrappeTestCase):
 
 		frappe.db.delete("Source Section", {"name": self.section_named("Sprite notes")})
 		index.rebuild_project(self.project.name)
-		self.assertEqual(index.index_stats(self.project.name)["sections"], 2)
+		self.assertEqual(index.index_stats([self.project.name])["sections"], 2)
 
 	def test_upsert_and_drop_section(self):
 		section = self.section_named("Timer recipe")
@@ -340,7 +381,7 @@ class TestRagCore(FrappeTestCase):
 		self.assertIn(section, [hit.section for hit in hits])
 
 		index.drop_section(section)
-		self.assertEqual(index.index_stats(self.project.name)["sections"], 2)
+		self.assertEqual(index.index_stats([self.project.name])["sections"], 2)
 
 	def test_upsert_removes_the_chunks_a_shrinking_section_leaves_behind(self):
 		"""Delete-then-add: a section that shrinks from N chunks to 1 must leave exactly 1 row."""
@@ -380,8 +421,6 @@ class TestRagCore(FrappeTestCase):
 		self.assertEqual(enqueue.call_args.args[0], "wikify.rag.events.rebuild_pending_project")
 		self.assertEqual(enqueue.call_args.kwargs["project"], self.project.name)
 		frappe.cache().delete_value(events.pending_key(self.project.name))
-
-	# --- search -----------------------------------------------------------------------
 
 	def test_filter_mode_is_exhaustive_and_ignores_limit(self):
 		hits = search.search(
@@ -569,8 +608,6 @@ class TestRagCore(FrappeTestCase):
 				search.search("anything", mode="hybrid", allowed_projects=search.ALL_PROJECTS), []
 			)
 
-	# --- rerank -----------------------------------------------------------------------
-
 	def test_filter_mode_does_not_pay_for_a_rerank_it_discards(self):
 		"""Filter mode re-sorts by document and page, so a rerank is a wasted LLM round-trip."""
 		with (
@@ -634,3 +671,74 @@ class TestRagCore(FrappeTestCase):
 		):
 			failed = search.search("coin", rerank=True, **scope)
 		self.assertEqual([hit.section for hit in failed], order)
+
+	def test_search_returns_the_reranked_winner_not_the_fusion_winner(self):
+		"""The rerank has to survive the `limit` slice, or paying for it is theatre.
+
+		`search` used to re-sort by the fusion score after reranking, which put the reranked
+		winner back where fusion had it and then cut it off with everything past `limit`. On
+		PRJ-2026-00002 that is how "what are the slab rates under section 115BAC(1A)" scored
+		8.0 at fusion rank 10, never reached the answer, and was refused.
+		"""
+		scope = {"project": self.project.name, "mode": "hybrid", "allowed_projects": search.ALL_PROJECTS}
+		fusion_order = search.search("coin", limit=50, **scope)
+		self.assertGreater(len(fusion_order), 1)
+		outsider = fusion_order[-1]
+
+		with (
+			patch("wikify.engine.llm.has_openrouter", return_value=True),
+			patch(
+				"wikify.engine.llm.chat_completion",
+				side_effect=rerank_favouring(outsider.hierarchy_path or outsider.title),
+			),
+		):
+			hits = search.search("coin", limit=1, rerank=True, **scope)
+
+		self.assertEqual([hit.section for hit in hits], [outsider.section])
+		self.assertEqual(hits[0].rerank_score, 9.0)
+
+	def test_the_rerank_grades_candidates_in_batches(self):
+		"""A single call over a long candidate list comes back all zeros — see
+		`search.RERANK_BATCH_SIZE`. Candidate numbers stay global across the batches."""
+		hits = [make_bare_hit(f"Section {position}") for position in range(25)]
+
+		with (
+			patch("wikify.engine.llm.has_openrouter", return_value=True),
+			patch(
+				"wikify.engine.llm.chat_completion", side_effect=rerank_favouring("Section 24")
+			) as chat_completion,
+		):
+			reranked = search.rerank_hits("coin", hits)
+
+		self.assertEqual(chat_completion.call_count, 3)
+		# Sorted, because the batches run concurrently (`search.RERANK_WORKERS`) — what must
+		# hold is that they partition the candidate list, not the order they come back in.
+		batches = sorted(candidate_ids(call.args[1]) for call in chat_completion.call_args_list)
+		self.assertEqual(batches, [list(range(0, 10)), list(range(10, 20)), list(range(20, 25))])
+		self.assertEqual(reranked[0].title, "Section 24")
+
+	def test_a_batch_that_skips_candidates_is_dropped_whole(self):
+		"""A partial reply would leave the unscored candidates reading as a confident 0."""
+		hits = [make_bare_hit(f"Section {position}") for position in range(3)]
+		partial = {"choices": [{"message": {"content": frappe.as_json({"scores": [{"id": 0, "score": 9}]})}}]}
+
+		with (
+			patch("wikify.engine.llm.has_openrouter", return_value=True),
+			patch("wikify.engine.llm.chat_completion", return_value=partial),
+		):
+			reranked = search.rerank_hits("coin", hits)
+
+		self.assertEqual([hit.title for hit in reranked], ["Section 0", "Section 1", "Section 2"])
+		self.assertTrue(all(hit.rerank_score is None for hit in reranked))
+
+	def test_the_similarity_leg_reports_an_absolute_score(self):
+		"""`answer.below_floor` needs a number that means the same thing across queries, so
+		the vector leg's similarity rides along even when fusion decides the order."""
+		scope = {"project": self.project.name, "allowed_projects": search.ALL_PROJECTS, "limit": 5}
+		for mode in ("hybrid", "vector"):
+			hits = search.search("coin", mode=mode, **scope)
+			self.assertTrue(hits, mode)
+			self.assertTrue(all(0.0 < hit.vector_score <= 1.0 for hit in hits), mode)
+
+		keyword_only = search.search("coin", mode="fts", **scope)
+		self.assertTrue(all(hit.vector_score is None for hit in keyword_only))

@@ -3,7 +3,7 @@ import { computed, ref, watch, onMounted, onUnmounted } from "vue";
 import { Badge, Button, useCall, toast } from "frappe-ui";
 import { useSocket } from "@/socket";
 import TypeChip from "@/components/TypeChip.vue";
-import { useIsMobile } from "@/composables/useIsMobile";
+import { useIsMobile } from "@/composables/useMediaQuery";
 import { actionButtonProps } from "@/utils/actionButton";
 
 const props = defineProps({

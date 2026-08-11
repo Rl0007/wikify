@@ -31,8 +31,9 @@ PENDING_TTL_SECONDS = 1800
 # saved ten times costs one rebuild.
 DIRTY_PAGES_HASH = "wikify_rag_dirty_pages"
 
-# Past this many sections in one pass, one project rebuild beats N `upsert_section` calls —
-# each of those re-creates the whole FTS index, so the per-section path stops paying off.
+# Past this many sections in one pass, one project rebuild beats a scoped `upsert_sections`:
+# the batch still re-embeds every section it touches, so at some width re-embedding the whole
+# project costs the same and leaves the index consistent in one commit instead of two.
 PROJECT_REBUILD_FANOUT = 10
 
 # ponytail: coalescing rebuilds the WHOLE project, so a one-word title fix re-embeds every
@@ -106,9 +107,6 @@ def rebuild_pending_project(project: str) -> None:
 	frappe.cache().delete_value(pending_key(project))
 	rebuild_project(project)
 	frappe.db.commit()
-
-
-# --- page → section → index propagation ------------------------------------------------
 
 
 def queue_page_propagation(doc, method: str | None = None) -> None:
@@ -244,5 +242,4 @@ def reindex_sections(project: str | None, section_names: list[str]) -> None:
 	if len(section_names) > PROJECT_REBUILD_FANOUT:
 		queue_project_rebuild(project)
 		return
-	for section_name in section_names:
-		index.upsert_section(section_name)
+	index.upsert_sections(section_names)

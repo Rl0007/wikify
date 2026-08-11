@@ -15,7 +15,7 @@ from frappe import _
 
 from wikify.agent.context import Ctx
 from wikify.agent.registry import Tool
-from wikify.rag.chunk import CONTEXT_SEPARATOR
+from wikify.rag import search as rag_search
 
 # Excerpts are trimmed hard — the model pulls the full body with read_section when a hit
 # looks worth reading.
@@ -25,13 +25,10 @@ EXCERPT_LIMIT = 700
 def format_hits(hits: list[dict], mode: str) -> str:
 	lines = [f"{len(hits)} result(s) ({mode}):"]
 	for position, hit in enumerate(hits, start=1):
-		pages = f"p.{hit['page_start']}"
-		if hit.get("page_end") and hit["page_end"] != hit["page_start"]:
-			pages = f"p.{hit['page_start']}-{hit['page_end']}"
 		type_label = f" ({hit['section_type']})" if hit.get("section_type") else ""
-		crumb = f"{hit['document_title']}{CONTEXT_SEPARATOR}{hit['hierarchy_path'] or hit['title']}"
 		lines.append(
-			f"\n[{position}] {crumb}{type_label} [{pages}] <{hit['section']}> score={hit['score']:.4f}"
+			f"\n[{position}] {rag_search.crumb(hit)}{type_label} [{rag_search.page_label(hit)}] "
+			f"<{hit['section']}> score={hit['score']:.4f}"
 		)
 		text = hit.get("text") or ""
 		lines.append(text if len(text) <= EXCERPT_LIMIT else text[:EXCERPT_LIMIT] + "…")

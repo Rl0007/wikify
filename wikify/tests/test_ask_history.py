@@ -4,34 +4,26 @@
 """Ask conversation persistence + per-ask cost.
 
 Three things are worth asserting here: that one ask lands as a question/answer pair a
-later eval query can rejoin on `turn`, that the cost figure is the sum of all three LLM
-legs rather than synthesis alone, and that one user's conversation is invisible to
-another — which is enforced by the DocType's `if_owner` permission, not by a hand-rolled
-filter, so it has to be exercised as a real second user.
-"""
+later eval query can rejoin on `turn`, that the logged cost is the figure the ask itself
+reported and that a conversation totals its own turns, and that one user's conversation
+is invisible to another — which is enforced by the DocType's `if_owner` permission, not
+by a hand-rolled filter, so it has to be exercised as a real second user.
 
-from types import SimpleNamespace
-from unittest.mock import patch
+What the ask *costs* is measured in `rag.usage` and asserted in `test_ask_cost`.
+"""
 
 import frappe
 from frappe.tests.utils import FrappeTestCase
 
 from wikify.api import ask_history as api_ask_history
-from wikify.engine import llm as engine_llm
-from wikify.engine.store import cost_of
 from wikify.rag import history
 
 OTHER_USER = "ask-history-other@example.com"
 
-ROUTE_METRIC = {"label": "rag_route", "cost": 0.000021, "prompt_tokens": 900, "completion_tokens": 60}
-RERANK_METRIC = {"label": "rag_rerank", "cost": 0.000044, "prompt_tokens": 1800, "completion_tokens": 40}
-SYNTHESIS_METRIC = {
-	"label": "synthesis",
-	"cost": 0.004120,
-	"prompt_tokens": 5200,
-	"completion_tokens": 610,
-}
-ALL_LEGS = [ROUTE_METRIC, RERANK_METRIC, SYNTHESIS_METRIC]
+# One ask's three legs — routing, rerank, synthesis — as `answer()` reports them.
+ALL_LEGS_COST = 0.004185
+ALL_LEGS_PROMPT_TOKENS = 7900
+ALL_LEGS_COMPLETION_TOKENS = 710
 
 
 def make_project(label: str = "Ask History") -> str:
@@ -52,9 +44,15 @@ def make_result(
 	section_type: str | None = None,
 	refused: bool = False,
 	citations: list | None = None,
+	cost: float = ALL_LEGS_COST,
+	prompt_tokens: int = ALL_LEGS_PROMPT_TOKENS,
+	completion_tokens: int = ALL_LEGS_COMPLETION_TOKENS,
 ) -> dict:
 	"""The dict `rag.answer.answer()` returns."""
 	return {
+		"cost": cost,
+		"prompt_tokens": prompt_tokens,
+		"completion_tokens": completion_tokens,
 		"answer": answer,
 		"citations": []
 		if refused
@@ -83,9 +81,7 @@ class TestAskHistoryTurns(FrappeTestCase):
 		self.project = make_project()
 
 	def test_first_turn_opens_a_titled_conversation(self):
-		session = history.record_turn(
-			None, "List every job description", make_result(), project=self.project, llm_metrics=ALL_LEGS
-		)
+		session = history.record_turn(None, "List every job description", make_result(), project=self.project)
 		conversation = frappe.get_doc("Wikify Ask Session", session)
 		self.assertEqual(conversation.title, "List every job description")
 		self.assertEqual(conversation.project, self.project)
@@ -94,8 +90,8 @@ class TestAskHistoryTurns(FrappeTestCase):
 		self.assertIsNotNone(conversation.started_at)
 
 	def test_turn_number_pairs_the_question_with_its_answer(self):
-		session = history.record_turn(None, "First question", make_result(), llm_metrics=ALL_LEGS)
-		history.record_turn(session, "Second question", make_result(), llm_metrics=ALL_LEGS)
+		session = history.record_turn(None, "First question", make_result())
+		history.record_turn(session, "Second question", make_result())
 
 		rows = frappe.get_all(
 			"Wikify Ask Message",
@@ -111,9 +107,7 @@ class TestAskHistoryTurns(FrappeTestCase):
 
 	def test_answer_row_keeps_the_route_and_the_citations_it_stood_on(self):
 		citations = [{"chunk_id": "sec-a::0", "title": "Backend Engineer", "wiki_route": "/demo/roles"}]
-		session = history.record_turn(
-			None, "List every job description", make_result(citations=citations), llm_metrics=ALL_LEGS
-		)
+		session = history.record_turn(None, "List every job description", make_result(citations=citations))
 
 		answer_row = history.get_session(session)["messages"][1]
 		self.assertEqual(answer_row["route_intent"], "exhaustive")
@@ -123,14 +117,12 @@ class TestAskHistoryTurns(FrappeTestCase):
 
 	def test_unknown_section_type_is_dropped_not_raised(self):
 		"""A type deleted since routing must not cost a turn that was already answered."""
-		session = history.record_turn(
-			None, "Which roles?", make_result(section_type="no_such_type_here"), llm_metrics=ALL_LEGS
-		)
+		session = history.record_turn(None, "Which roles?", make_result(section_type="no_such_type_here"))
 		self.assertIsNone(history.get_session(session)["messages"][1]["route_section_type"])
 
 	def test_refused_turn_is_logged_with_no_citations(self):
 		session = history.record_turn(
-			None, "Who won the cup?", make_result("I couldn't find this.", refused=True), llm_metrics=[]
+			None, "Who won the cup?", make_result("I couldn't find this.", refused=True)
 		)
 		answer_row = history.get_session(session)["messages"][1]
 		self.assertEqual(answer_row["refused"], 1)
@@ -138,15 +130,13 @@ class TestAskHistoryTurns(FrappeTestCase):
 
 	def test_a_stale_session_id_opens_a_fresh_conversation(self):
 		"""ask() may still hold the id of a conversation the user has since deleted."""
-		session = history.record_turn(
-			"ASK-2026-99999", "List every job description", make_result(), llm_metrics=ALL_LEGS
-		)
+		session = history.record_turn("ASK-2026-99999", "List every job description", make_result())
 		self.assertNotEqual(session, "ASK-2026-99999")
 		self.assertTrue(frappe.db.exists("Wikify Ask Session", session))
 
 	def test_recent_turns_replay_as_router_history(self):
-		session = history.record_turn(None, "First question", make_result("First answer."), llm_metrics=[])
-		history.record_turn(session, "Second question", make_result("Second answer."), llm_metrics=[])
+		session = history.record_turn(None, "First question", make_result("First answer."))
+		history.record_turn(session, "Second question", make_result("Second answer."))
 
 		self.assertEqual(
 			history.recent_turns(session),
@@ -159,69 +149,57 @@ class TestAskHistoryTurns(FrappeTestCase):
 		)
 
 	def test_deleting_a_conversation_removes_its_turns(self):
-		session = history.record_turn(None, "List every job description", make_result(), llm_metrics=ALL_LEGS)
+		session = history.record_turn(None, "List every job description", make_result())
 		history.delete_session(session)
 		self.assertEqual(frappe.db.count("Wikify Ask Message", {"session": session}), 0)
 
 
 class TestAskHistoryCost(FrappeTestCase):
-	def test_turn_metrics_sums_routing_rerank_and_synthesis(self):
-		"""The user wants cost per ask, so all three legs land in one figure."""
-		engine_calls: list[dict] = []
-		with patch.object(engine_llm, "get_metrics", side_effect=lambda: list(engine_calls)):
-			history.start_turn()
-			engine_calls.extend([ROUTE_METRIC, RERANK_METRIC])
-			history.record_litellm_metrics(
-				{"model": "claude-sonnet-4.6", "response_cost": SYNTHESIS_METRIC["cost"]},
-				SimpleNamespace(usage=SimpleNamespace(prompt_tokens=5200, completion_tokens=610)),
-				None,
-				None,
-			)
-			metrics = history.turn_metrics()
-
-		self.assertEqual([entry.get("label") for entry in metrics], ["rag_route", "rag_rerank", "synthesis"])
-		self.assertAlmostEqual(cost_of(metrics), 0.004185)
-		self.assertEqual(history.tokens_of(metrics), (7900, 710))
-
-	def test_watermark_excludes_a_previous_ask(self):
-		engine_calls = [ROUTE_METRIC]
-		with patch.object(engine_llm, "get_metrics", side_effect=lambda: list(engine_calls)):
-			history.start_turn()
-			engine_calls.append(RERANK_METRIC)
-			history.record_litellm_metrics({"response_cost": 0.001}, SimpleNamespace(usage=None), None, None)
-			metrics = history.turn_metrics()
-
-		self.assertEqual([entry.get("label") for entry in metrics], ["rag_rerank", "synthesis"])
-
-	def test_cost_lands_on_the_answer_row_and_rolls_up(self):
-		session = history.record_turn(None, "First question", make_result(), llm_metrics=ALL_LEGS)
-		history.record_turn(session, "Second question", make_result(), llm_metrics=[ROUTE_METRIC])
+	def test_the_logged_cost_is_the_one_the_ask_reported(self):
+		"""The row and the answer must carry the same figure — they once differed by 13x."""
+		result = make_result()
+		session = history.record_turn(None, "First question", result)
 
 		question_row, answer_row = history.get_session(session)["messages"][:2]
 		self.assertEqual(question_row["cost"], 0)
-		self.assertAlmostEqual(answer_row["cost"], 0.004185)
-		self.assertEqual((answer_row["prompt_tokens"], answer_row["completion_tokens"]), (7900, 710))
+		self.assertAlmostEqual(answer_row["cost"], result["cost"])
+		self.assertEqual(
+			(answer_row["prompt_tokens"], answer_row["completion_tokens"]),
+			(result["prompt_tokens"], result["completion_tokens"]),
+		)
+
+	def test_a_conversation_totals_exactly_its_own_turns(self):
+		session = history.record_turn(None, "First question", make_result())
+		history.record_turn(
+			session,
+			"Second question",
+			make_result(cost=0.000021, prompt_tokens=900, completion_tokens=60),
+		)
 
 		conversation = frappe.get_doc("Wikify Ask Session", session)
-		self.assertAlmostEqual(conversation.total_cost, 0.004206)
-		self.assertEqual(conversation.total_tokens, 9570)
-		self.assertEqual(conversation.message_count, 4)
+		messages = history.get_session(session)["messages"]
+		self.assertAlmostEqual(conversation.total_cost, sum(row["cost"] for row in messages))
+		self.assertEqual(
+			conversation.total_tokens,
+			sum(row["prompt_tokens"] + row["completion_tokens"] for row in messages),
+		)
+		self.assertEqual(conversation.message_count, len(messages))
 
-	def test_a_refused_turn_does_not_wait_for_synthesis_usage(self):
-		"""Nothing synthesises on a refusal, so the grace wait must be skipped."""
-		with patch.object(engine_llm, "get_metrics", return_value=[]):
-			history.start_turn()
-			with patch.object(history, "wait_for_synthesis_metrics") as waited:
-				history.record_turn(None, "Who won the cup?", make_result(refused=True))
-		waited.assert_not_called()
+	def test_a_drifted_total_heals_on_the_next_turn(self):
+		"""Totals are summed, not incremented, so a legacy over-counted row corrects itself."""
+		session = history.record_turn(None, "First question", make_result())
+		frappe.db.set_value("Wikify Ask Session", session, "total_cost", 9.99)
+
+		history.record_turn(session, "Second question", make_result())
+
+		conversation = frappe.get_doc("Wikify Ask Session", session)
+		self.assertAlmostEqual(conversation.total_cost, ALL_LEGS_COST * 2)
 
 
 class TestAskHistoryPermissions(FrappeTestCase):
 	def setUp(self):
 		self.other_user = make_user(OTHER_USER)
-		self.session = history.record_turn(
-			None, "Administrator's question", make_result(), llm_metrics=ALL_LEGS
-		)
+		self.session = history.record_turn(None, "Administrator's question", make_result())
 		self.addCleanup(frappe.set_user, "Administrator")
 
 	def test_another_user_cannot_list_or_read_the_conversation(self):
@@ -233,11 +211,13 @@ class TestAskHistoryPermissions(FrappeTestCase):
 	def test_another_user_cannot_append_to_the_conversation(self):
 		frappe.set_user(self.other_user)
 		with self.assertRaises(frappe.PermissionError):
-			history.record_turn(self.session, "Sneaking in", make_result(), llm_metrics=[])
+			history.record_turn(self.session, "Sneaking in", make_result())
 
 	def test_a_user_sees_their_own_conversation(self):
 		frappe.set_user(self.other_user)
-		own_session = history.record_turn(None, "My own question", make_result(), llm_metrics=[ROUTE_METRIC])
+		own_session = history.record_turn(
+			None, "My own question", make_result(cost=0.000021, prompt_tokens=900, completion_tokens=60)
+		)
 
 		listed = [row.name for row in history.list_sessions()]
 		self.assertIn(own_session, listed)
@@ -246,7 +226,9 @@ class TestAskHistoryPermissions(FrappeTestCase):
 
 	def test_system_manager_sees_every_conversation(self):
 		frappe.set_user(self.other_user)
-		own_session = history.record_turn(None, "My own question", make_result(), llm_metrics=[ROUTE_METRIC])
+		own_session = history.record_turn(
+			None, "My own question", make_result(cost=0.000021, prompt_tokens=900, completion_tokens=60)
+		)
 
 		frappe.set_user("Administrator")
 		listed = {row.name for row in history.list_sessions()}
@@ -257,9 +239,7 @@ class TestAskHistoryPermissions(FrappeTestCase):
 class TestAskHistoryApi(FrappeTestCase):
 	def test_api_returns_the_conversation_and_its_turns(self):
 		project = make_project()
-		session = history.record_turn(
-			None, "List every job description", make_result(), project=project, llm_metrics=ALL_LEGS
-		)
+		session = history.record_turn(None, "List every job description", make_result(), project=project)
 
 		listed = api_ask_history.list_sessions(project=project)
 		self.assertEqual([row.name for row in listed], [session])

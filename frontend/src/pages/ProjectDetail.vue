@@ -3,7 +3,7 @@ import { ref, watch } from "vue";
 import { Badge, Button, PageHeader, useDoc } from "frappe-ui";
 import ImportList from "@/pages/ImportList.vue";
 import NewImportDialog from "@/components/NewImportDialog.vue";
-import { useIsMobile } from "@/composables/useIsMobile";
+import { useIsMobile } from "@/composables/useMediaQuery";
 import { actionButtonProps } from "@/utils/actionButton";
 import { setProject } from "@/data/agentContext";
 

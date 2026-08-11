@@ -360,7 +360,7 @@ class TestPageLookup(FrappeTestCase):
 	def test_unknown_documents_read_nothing(self):
 		self.assertEqual(evidence.get_pages_by_document(["NOPE"], [1, 2]), {})
 		self.assertEqual(evidence.get_pages_by_document([], []), {})
-		self.assertEqual(chunk.get_pages_by_document(["NOPE"]), {})
+		self.assertEqual(evidence.get_pages_by_document(["NOPE"]), {})
 
 	def test_pages_come_back_grouped_by_document(self):
 		document = frappe.get_all("Source Page", fields=["source_document", "page_no"], limit=1)

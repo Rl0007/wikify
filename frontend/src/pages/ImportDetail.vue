@@ -13,7 +13,7 @@ import {
 	useList,
 } from "frappe-ui";
 import { useSocket } from "@/socket";
-import { useIsMobile } from "@/composables/useIsMobile";
+import { useIsMobile } from "@/composables/useMediaQuery";
 import { actionButtonProps } from "@/utils/actionButton";
 import { statusTheme, isActive } from "@/utils/status";
 import PageReview from "@/components/PageReview.vue";

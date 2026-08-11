@@ -63,17 +63,22 @@ def with_page_crop(markdown: str, page_image: str | None) -> str:
 	return f"{markdown}\n\n![Source page]({page_image})".strip()
 
 
+def best_composite(candidates: list[tuple], baseline_composite: float) -> float:
+	"""The best read of the page anyone managed — the bar adoption and escalation both use."""
+	return max([baseline_composite or 0.0, *(candidate[2].composite for candidate in candidates)])
+
+
 def pick_winner(candidates: list[tuple], baseline_composite: float, baseline_markdown: str) -> tuple | None:
 	"""Best adopt-eligible candidate: vlm when it also matches/beats cleanup's composite
 	(cleanup's composite is depressed by intended furniture removal, so a tie goes to
 	vlm), else the eligible cleanup, else None (keep baseline)."""
-	best_composite = max([baseline_composite or 0.0, *(c[2].composite for c in candidates)])
+	best = best_composite(candidates, baseline_composite)
 	best_chars = max([content_chars(baseline_markdown), *(content_chars(c[1]) for c in candidates)])
 	eligible = [
 		c
 		for c in candidates
 		if c[3]
-		and c[2].composite >= best_composite * ADOPTION_COMPOSITE_RATIO
+		and c[2].composite >= best * ADOPTION_COMPOSITE_RATIO
 		and (content_chars(c[1]) >= MIN_CANONICAL_CHARS or content_chars(c[1]) >= best_chars)
 	]
 	vlm_candidate = next((c for c in eligible if c[0] == "vlm"), None)
@@ -134,8 +139,10 @@ def remediate_pdf(
 			page = doc[p["page_no"] - 1]
 			gt = page.get_text("text")
 			kind = p["kind"]
-			page_image = store.get_page_image(p["name"]) or ""
+			page_image = p["image"] or ""
 			data_url = pdf_utils.png_to_data_url(pdf_utils.render_png(page, dpi=dpi))
+			# Regions are the page's shape analysis — computed once and reused for the hint.
+			page_regions = regions.find_regions(page)
 
 			use_judge = judge_all or kind == "visual"
 			img = data_url if use_judge else None
@@ -160,7 +167,7 @@ def remediate_pdf(
 					data_url,
 					project_context=project_context,
 					instruction=instruction,
-					shape_hint=regions.shape_hint(regions.find_regions(page)),
+					shape_hint=regions.shape_hint(page_regions),
 				)
 				# Nothing unverified is stored: a diagram that will not parse after repair, or one
 				# carrying the signature of a table flattened into dangling branches, is dropped in
@@ -193,10 +200,10 @@ def remediate_pdf(
 					errors.append(f"cleanup failed: {e}")
 
 			winner = pick_winner(candidates, base_ps.composite, base_md)
-			best_composite = max([base_ps.composite, *(c[2].composite for c in candidates)])
-			if best_composite < float(settings.get("escalate_threshold")):
+			best = best_composite(candidates, base_ps.composite)
+			if best < float(settings.get("escalate_threshold")):
 				errors.append(
-					f"every candidate scored below the escalate threshold (best {best_composite}) — "
+					f"every candidate scored below the escalate threshold (best {best}) — "
 					"kept the best available read; this page needs a human"
 				)
 			# Record the adopted candidate; when nothing is adopted, record the vlm attempt

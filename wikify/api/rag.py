@@ -20,17 +20,12 @@ from frappe import _
 from frappe.utils.data import cint, sbool
 
 from wikify.rag import answer as rag_answer
-from wikify.rag import embed
 from wikify.rag import history as rag_history
 from wikify.rag import index as rag_index
 from wikify.rag import search as rag_search
 from wikify.rag.router import route as route_question
 
 STREAM_EVENT = "wikify_rag_answer"
-
-# The naive leg of `compare`: plain vector top-k with no filter and no routing — exactly
-# what a textbook RAG pipeline does, which is the baseline the thesis argues against.
-NAIVE_LIMIT = 8
 
 
 def readable_projects() -> list[str]:
@@ -126,7 +121,6 @@ def ask(
 
 	user = frappe.session.user
 	started = time.monotonic()
-	rag_history.start_turn()
 
 	def publish(payload: dict) -> None:
 		frappe.publish_realtime(STREAM_EVENT, {"session": session, **payload}, user=user)
@@ -188,28 +182,21 @@ def index_status(project: str | None = None) -> dict:
 	"""
 	assert_readable(project)
 	projects = [project] if project else readable_projects()
-	# ponytail: one index scan per readable project, replace with a single grouped scan
-	# once a site carries more than a handful of projects.
-	totals = {"chunks": 0, "sections": 0, "documents": 0, "indexed_at": None, "dim": embed.EMBED_DIM}
-	for name in projects:
-		stats = rag_index.index_stats(name)
-		for key in ("chunks", "sections", "documents"):
-			totals[key] += stats[key]
-		if stats["indexed_at"] and (not totals["indexed_at"] or stats["indexed_at"] > totals["indexed_at"]):
-			totals["indexed_at"] = stats["indexed_at"]
-	totals["stale"] = is_stale(project, totals["indexed_at"])
+	totals = rag_index.index_stats(projects)
+	totals["stale"] = is_stale(projects, totals["indexed_at"])
 	return totals
 
 
-def is_stale(project: str | None, indexed_at) -> bool:
+def is_stale(projects: list[str], indexed_at) -> bool:
 	"""True when any in-scope section was edited after the index was last written."""
 	if not indexed_at:
 		return True
-	filters: dict = {"modified": [">", indexed_at]}
-	projects = [project] if project else readable_projects()
 	if not projects:
 		return False
-	filters["source_document"] = ["in", documents_in_projects(projects)]
+	filters = {
+		"modified": [">", indexed_at],
+		"source_document": ["in", documents_in_projects(projects)],
+	}
 	return bool(frappe.get_all("Source Section", filters=filters, limit=1, pluck="name"))
 
 
@@ -241,22 +228,12 @@ def compare(query: str, project: str | None = None) -> dict:
 		frappe.throw(_("Enter a query to compare."))
 	assert_readable(project)
 
-	allowed = readable_projects()
-	naive = rag_search.search(
-		query,
-		project=project,
-		limit=NAIVE_LIMIT,
-		mode="vector",
-		allowed_projects=allowed,
-	)
-	decided = route_question(query, project)
-	routed = rag_answer.retrieve(decided, project, False, allowed_projects=allowed)
-	found_by_naive = {hit.section for hit in naive}
+	comparison = rag_answer.compare(query, project, readable_projects())
 	return {
-		"naive": [hit.as_dict() for hit in naive],
-		"routed": [hit.as_dict() for hit in routed],
-		"route": decided.as_dict(),
+		"naive": [hit.as_dict() for hit in comparison["naive"]],
+		"routed": [hit.as_dict() for hit in comparison["routed"]],
+		"route": comparison["route"].as_dict(),
 		# The headline number: the sections the routed leg found that naive top-k never saw.
 		# Precomputed here so the interface can highlight them without re-deriving the diff.
-		"missed_by_naive": [hit.section for hit in routed if hit.section not in found_by_naive],
+		"missed_by_naive": [hit.section for hit in comparison["missed_by_naive"]],
 	}

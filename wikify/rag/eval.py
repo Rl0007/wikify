@@ -1,6 +1,6 @@
 """Retrieval evaluation — the POC-2 thesis measured, not asserted.
 
-Twelve golden questions over the Demo Corpus (`specs/poc-rag-DEMO-DATA.md`) are run down
+Twelve golden questions over the Demo Corpus (`GOLDEN_QUESTIONS` below) are run down
 two legs and scored side by side:
 
 - **naive**  — plain top-k vector search on the raw question, no router, no filter. This is
@@ -14,13 +14,12 @@ expected sources, or only some of them? A pipeline that finds six of fifteen job
 descriptions is 40% recall and 0% complete, and for "give me all the job descriptions"
 only the second number describes what the user actually got.
 
-**Why the golden questions are transcribed here rather than parsed out of the markdown.**
-The expected-source lists in `poc-rag-DEMO-DATA.md` live in free prose ("**Job Description
-— Community Midwife** (St Aubyn); ... (Meridian)"), not in a machine-readable table, so a
-parser would be a regex over English that rots silently the first time someone rewords a
-paragraph. Instead the ground truth is transcribed below and `resolve_expected()` checks
-every title against the real Source Sections at run time — a transcription typo or a
-renamed section is a loud failure, not a quiet zero.
+**Why the ground truth is transcribed here rather than parsed from prose.** Expected-source
+lists written as English ("**Job Description — Community Midwife** (St Aubyn); ...
+(Meridian)") can only be read by a regex over prose, which rots silently the first time
+someone rewords a paragraph. Instead `GOLDEN_QUESTIONS` below carries the ground truth
+literally and `resolve_expected()` checks every title against the real Source Sections at
+run time — a transcription typo or a renamed section is a loud failure, not a quiet zero.
 
 Usage (from the bench root):
 
@@ -48,17 +47,6 @@ DEMO_PROJECT_NAME = "Demo Corpus"
 DEFAULT_K = 8
 MODES = ("naive", "routed")
 SCORECARD_PATH = ("docs", "implementation", "media", "rag-eval.html")
-
-# The routed leg mirrors production exactly: same intent → mode map and same exhaustive
-# ceiling `answer()` uses, so the eval cannot flatter a strategy the app does not run.
-MODE_FOR_INTENT = rag_answer.MODE_FOR_INTENT
-EXHAUSTIVE_LIMIT = rag_answer.EXHAUSTIVE_LIMIT
-
-# The harness runs headless against one explicitly named project, so it opts out of the ACL
-# pre-filter on purpose rather than pretending to be a logged-in user. Imported directly, not
-# via `getattr` with a fallback: a fallback would silently reinstate the unscoped default this
-# sentinel exists to prevent.
-ALL_PROJECTS = rag_search.ALL_PROJECTS
 
 JD = "staff_roles_and_responsibilities"
 PAY = "administrative_policies"
@@ -92,8 +80,8 @@ MERIDIAN_JDS = [
 ]
 
 # `expected` is the ground-truth source set (Source Section titles, unique across the demo
-# corpus). `required` is the subset the spec bolds — the source a semantic answer is wrong
-# without. `exhaustive` marks the lane where recall is scored against the COMPLETE set
+# corpus). `required` is the subset a semantic answer is wrong without.
+# `exhaustive` marks the lane where recall is scored against the COMPLETE set
 # rather than as recall@k.
 GOLDEN_QUESTIONS = [
 	{
@@ -273,9 +261,6 @@ GOLDEN_QUESTIONS = [
 ]
 
 
-# --- ground truth resolution ----------------------------------------------------------
-
-
 def demo_project() -> str:
 	"""The Demo Corpus project name. Autonames are not stable across sites, so look it up."""
 	project = frappe.db.get_value("Wikify Project", {"project_name": DEMO_PROJECT_NAME}, "name")
@@ -347,32 +332,6 @@ def hit_summary(hit) -> dict:
 	}
 
 
-# --- retrieval legs -------------------------------------------------------------------
-
-
-def naive_hits(question_text: str, project: str, k: int) -> list:
-	"""The baseline: raw question, plain vector top-k, no router and no metadata filter."""
-	return rag_search.search(
-		question_text, project=project, limit=k, mode="vector", allowed_projects=ALL_PROJECTS
-	)
-
-
-def routed_hits(decided, project: str, k: int) -> list:
-	"""The routed leg — the same intent → mode mapping `rag.answer.retrieve()` uses."""
-	mode = MODE_FOR_INTENT.get(decided.intent, "hybrid")
-	return rag_search.search(
-		decided.query,
-		project=project,
-		section_type=decided.section_type,
-		limit=EXHAUSTIVE_LIMIT if mode == "filter" else k,
-		mode=mode,
-		allowed_projects=ALL_PROJECTS,
-	)
-
-
-# --- scoring --------------------------------------------------------------------------
-
-
 def score_leg(expected: list[dict], required: list[str], hits: list) -> dict:
 	"""recall@k, precision@k, and completeness for one retrieval leg of one question."""
 	expected_names = {section["name"] for section in expected}
@@ -423,9 +382,6 @@ def aggregate(rows: list[dict], mode: str) -> dict:
 	}
 
 
-# --- the harness ----------------------------------------------------------------------
-
-
 def run_eval(
 	project: str | None = None,
 	k: int = DEFAULT_K,
@@ -469,16 +425,14 @@ def run_eval(
 			"expect_refusal": bool(question.get("expect_refusal")),
 		}
 		if "naive" in modes:
-			row["modes"]["naive"] = score_leg(
-				expected, question["required"], naive_hits(question["question"], project, k)
-			)
+			naive = rag_answer.naive_retrieve(question["question"], project, rag_search.ALL_PROJECTS, limit=k)
+			row["modes"]["naive"] = score_leg(expected, question["required"], naive)
 		if "routed" in modes:
-			row["modes"]["routed"] = score_leg(
-				expected, question["required"], routed_hits(decided, project, k)
-			)
+			routed = rag_answer.retrieve(decided, project, False, rag_search.ALL_PROJECTS, top_k=k)
+			row["modes"]["routed"] = score_leg(expected, question["required"], routed)
 		if check_refusals and question.get("expect_refusal"):
 			synthesised = rag_answer.answer(
-				question["question"], project=project, allowed_projects=ALL_PROJECTS
+				question["question"], project=project, allowed_projects=rag_search.ALL_PROJECTS
 			)
 			row["refused"] = bool(synthesised["refused"])
 		rows.append(row)
@@ -501,19 +455,17 @@ def run_eval(
 def compare_query(query: str, project: str | None = None, k: int = DEFAULT_K) -> dict:
 	"""One query, both legs, plus the diff — the structure `/rag-lab` renders.
 
-	The sibling of `wikify.api.rag.compare`; this one is the harness-side, permission-free
-	version used by the eval and the scorecard, and it adds the document-coverage counts
-	the visual comparison leans on.
+	The retrieval is `rag.answer.compare`, the same code `wikify.api.rag.compare` runs; this
+	is the harness-side, permission-free wrapper that adds the document-coverage counts the
+	visual comparison leans on.
 	"""
 	query = (query or "").strip()
 	if not query:
 		frappe.throw("Enter a query to compare.")
 	project = project or demo_project()
 
-	naive = naive_hits(query, project, k)
-	decided = route_question(query, project)
-	routed = routed_hits(decided, project, k)
-	found_by_naive = {hit.section for hit in naive}
+	comparison = rag_answer.compare(query, project, rag_search.ALL_PROJECTS, naive_limit=k, top_k=k)
+	decided = comparison["route"]
 	total_documents = len(frappe.get_all("Source Document", filters={"project": project}, pluck="name"))
 
 	return {
@@ -523,22 +475,20 @@ def compare_query(query: str, project: str | None = None, k: int = DEFAULT_K) ->
 		"route": decided.as_dict(),
 		"naive": {
 			"mode": "vector",
-			"hits": [hit_summary(hit) for hit in naive],
-			"count": len(naive),
-			"documents_covered": len({hit.document_title for hit in naive}),
+			"hits": [hit_summary(hit) for hit in comparison["naive"]],
+			"count": len(comparison["naive"]),
+			"documents_covered": len({hit.document_title for hit in comparison["naive"]}),
 		},
 		"routed": {
-			"mode": MODE_FOR_INTENT.get(decided.intent, "hybrid"),
-			"hits": [hit_summary(hit) for hit in routed],
-			"count": len(routed),
-			"documents_covered": len({hit.document_title for hit in routed}),
+			"mode": rag_answer.MODE_FOR_INTENT[decided.intent],
+			"hits": [hit_summary(hit) for hit in comparison["routed"]],
+			"count": len(comparison["routed"]),
+			"documents_covered": len({hit.document_title for hit in comparison["routed"]}),
 		},
 		"documents_in_project": total_documents,
-		"missed_by_naive": [hit_summary(hit) for hit in routed if hit.section not in found_by_naive],
+		"missed_by_naive": [hit_summary(hit) for hit in comparison["missed_by_naive"]],
 	}
 
-
-# --- HTML scorecard -------------------------------------------------------------------
 
 SCORECARD_CSS = """
 :root { color-scheme: light; }
@@ -780,9 +730,6 @@ def write_scorecard(results: dict, path: str | None = None) -> str:
 	with open(path, "w", encoding="utf-8") as scorecard:
 		scorecard.write(render_scorecard(results))
 	return path
-
-
-# --- headless entry point -------------------------------------------------------------
 
 
 def format_summary(results: dict) -> str:
