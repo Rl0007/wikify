@@ -10,9 +10,10 @@
  * Canvas can't consume Tailwind classes, so semantic-token colors are resolved from
  * probe elements at mount and re-resolved on theme change.
  */
-import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
-import { Button, FormControl, useCall } from "frappe-ui";
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { Badge, Button, FormControl, useCall } from "frappe-ui";
 import TypeChip from "@/components/TypeChip.vue";
+import { useIsNarrow } from "@/composables/useMediaQuery";
 import { forceCollide, forceLink, forceManyBody, forceSimulation, forceX, forceY } from "d3-force";
 import { select } from "d3-selection";
 import { zoom, zoomIdentity } from "d3-zoom";
@@ -48,6 +49,57 @@ function toggleType(name) {
 	const next = new Set(hiddenTypes.value);
 	next.has(name) ? next.delete(name) : next.add(name);
 	hiddenTypes.value = next;
+}
+
+// A 236-node force graph on a 390px screen is a hairball behind a pinch-zoom fight, and
+// the hover tooltips that carry the labels never fire on touch. Narrow screens get the
+// same graph as a list instead — grouped by Section Type, carrying the one thing a plain
+// tree can't show: how many REFERENCES each section is on. The lenses still apply.
+const isNarrow = useIsNarrow();
+
+const sectionNodes = computed(() => (graph.data?.nodes || []).filter((n) => n.kind === "section"));
+
+const referenceCounts = computed(() => {
+	const counts = {};
+	for (const edge of graph.data?.edges || []) {
+		if (edge.rel !== "REFERENCES") continue;
+		counts[edge.src] = (counts[edge.src] || 0) + 1;
+		counts[edge.dst] = (counts[edge.dst] || 0) + 1;
+	}
+	return counts;
+});
+
+const listGroups = computed(() => {
+	const query = search.value.trim().toLowerCase();
+	const labels = {};
+	for (const type of meta.value.types || []) labels[type.name] = type.label || type.name;
+
+	const groups = new Map();
+	for (const node of sectionNodes.value) {
+		if (query && !node.label.toLowerCase().includes(query)) continue;
+		if (focusDoc.value && node.doc !== focusDoc.value) continue;
+		const type = node.section_type || "";
+		if (type && hiddenTypes.value.has(type)) continue;
+		if (!groups.has(type)) groups.set(type, []);
+		groups.get(type).push(node);
+	}
+	return [...groups.entries()]
+		.map(([type, sections]) => ({
+			type,
+			label: labels[type] || "Untyped",
+			color: typeColor[type],
+			sections,
+		}))
+		.sort((a, b) => b.sections.length - a.sections.length);
+});
+
+const listCount = computed(() => listGroups.value.reduce((n, g) => n + g.sections.length, 0));
+
+function pageRange(node) {
+	if (!node.page_start) return "";
+	return node.page_start === node.page_end
+		? `p${node.page_start}`
+		: `p${node.page_start}–${node.page_end}`;
 }
 
 watch([search, hiddenTypes, showHierarchy, showRefs, sizeMode, focusDoc], () => scheduleDraw());
@@ -141,7 +193,11 @@ function setGraph(data) {
 	}
 
 	sim?.stop();
+	sim = null;
 	userInteracted = false;
+	// Narrow screens render the list, so there is no layout to solve — don't spend a
+	// phone's battery on a force simulation nobody sees.
+	if (isNarrow.value) return;
 	sim = forceSimulation(nodes)
 		.force(
 			"link",
@@ -389,7 +445,8 @@ function resize() {
 let resizeObserver = null;
 let themeObserver = null;
 
-onMounted(() => {
+function addCanvas() {
+	if (!canvas.value || ctx) return;
 	ctx = canvas.value.getContext("2d");
 	resolveColors();
 	resize();
@@ -408,23 +465,48 @@ onMounted(() => {
 		attributes: true,
 		attributeFilter: ["data-theme", "class"],
 	});
-});
+}
 
-onBeforeUnmount(() => {
+function removeCanvas() {
 	sim?.stop();
 	sim = null;
 	if (raf) cancelAnimationFrame(raf);
+	raf = 0;
+	ctx = null;
 	resizeObserver?.disconnect();
+	resizeObserver = null;
 	themeObserver?.disconnect();
+	themeObserver = null;
+}
+
+onMounted(() => !isNarrow.value && addCanvas());
+
+// Rotating a tablet crosses the breakpoint: rebuild the canvas and its layout, or drop
+// them for the list.
+watch(isNarrow, async (narrow) => {
+	if (narrow) {
+		removeCanvas();
+		return;
+	}
+	await nextTick();
+	addCanvas();
+	if (graph.data) setGraph(graph.data);
 });
+
+onBeforeUnmount(removeCanvas);
 </script>
 
 <template>
-	<div ref="wrapper" class="relative h-full w-full overflow-hidden bg-surface-base">
-		<canvas ref="canvas" class="block" />
+	<div
+		ref="wrapper"
+		class="relative h-full w-full overflow-hidden bg-surface-base"
+		:class="isNarrow ? 'flex flex-col' : ''"
+	>
+		<canvas v-if="!isNarrow" ref="canvas" class="block" />
 
 		<!-- Lens toolbar: filters dim, never remove, so the layout stays put. -->
 		<div
+			v-if="!isNarrow"
 			class="absolute left-3 top-3 z-10 flex max-w-[calc(100%-1.5rem)] flex-wrap items-center gap-2"
 		>
 			<FormControl
@@ -459,9 +541,85 @@ onBeforeUnmount(() => {
 			</div>
 		</div>
 
+		<!-- Narrow fallback: the same nodes and lenses, read as a list. -->
+		<template v-if="isNarrow">
+			<div class="shrink-0 space-y-2 border-b border-outline-gray-1 px-3 py-2">
+				<p class="text-xs text-ink-gray-5">
+					A force graph needs room to read, so this screen lists the same sections by
+					type with their reference counts. Open it on a wider screen for the map.
+				</p>
+				<FormControl v-model="search" type="text" size="sm" placeholder="Search sections…" />
+				<FormControl
+					v-if="showDocFilter"
+					v-model="focusDoc"
+					type="select"
+					size="sm"
+					:options="docOptions"
+				/>
+				<div v-if="meta.types.length" class="flex flex-wrap gap-1.5">
+					<TypeChip
+						v-for="t in meta.types"
+						:key="t.name"
+						:label="t.label || t.name"
+						:color="typeColor[t.name]"
+						:count="t.count"
+						:active="!hiddenTypes.has(t.name)"
+						@click="toggleType(t.name)"
+					/>
+				</div>
+			</div>
+
+			<div class="min-h-0 flex-1 overflow-y-auto">
+				<div v-for="group in listGroups" :key="group.type" class="mb-4">
+					<div
+						class="sticky top-0 flex items-center gap-2 border-b border-outline-gray-1 bg-surface-base px-4 py-2"
+					>
+						<span
+							class="size-2.5 shrink-0 rounded-full"
+							:class="group.color ? '' : 'bg-surface-gray-5'"
+							:style="group.color ? { backgroundColor: group.color } : {}"
+							aria-hidden="true"
+						/>
+						<h2 class="min-w-0 flex-1 truncate text-sm font-medium text-ink-gray-8">
+							{{ group.label }}
+						</h2>
+						<Badge
+							:label="String(group.sections.length)"
+							theme="gray"
+							variant="subtle"
+							size="sm"
+						/>
+					</div>
+					<button
+						v-for="node in group.sections"
+						:key="node.id"
+						class="flex w-full items-center gap-2 border-b border-outline-gray-1 px-4 py-2.5 text-left last:border-b-0 active:bg-surface-gray-2"
+						@click="emit('select', node)"
+					>
+						<span class="min-w-0 flex-1 truncate text-sm text-ink-gray-8">{{
+							node.label
+						}}</span>
+						<span
+							v-if="referenceCounts[node.id]"
+							class="shrink-0 text-xs text-ink-gray-5"
+							>{{ referenceCounts[node.id] }} refs</span
+						>
+						<span
+							v-if="pageRange(node)"
+							class="shrink-0 text-xs tabular-nums text-ink-gray-4"
+							>{{ pageRange(node) }}</span
+						>
+					</button>
+				</div>
+				<p v-if="!listCount && !graph.loading" class="py-10 text-center text-sm text-ink-gray-5">
+					No sections match these filters.
+				</p>
+			</div>
+		</template>
+
 		<!-- Legend doubles as the type filter (click a chip to dim that type). -->
 		<div
-			v-if="meta.types.length"
+			v-if="!isNarrow && meta.types.length"
 			class="absolute bottom-3 left-3 z-10 flex max-w-[calc(100%-1.5rem)] flex-wrap gap-1.5"
 		>
 			<TypeChip
@@ -500,7 +658,7 @@ onBeforeUnmount(() => {
 			</p>
 		</div>
 		<p
-			v-else-if="graph.data && !refCount"
+			v-else-if="!isNarrow && graph.data && !refCount"
 			class="pointer-events-none absolute bottom-3 left-1/2 -translate-x-1/2 text-xs text-ink-gray-4"
 		>
 			Showing hierarchy only — reference links appear when sections cite pages.

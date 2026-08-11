@@ -9,3 +9,4 @@ wikify.patches.v0_2.seed_uncategorized_and_backfill
 wikify.patches.v0_4.merge_duplicate_section_types
 wikify.patches.v0_6.backfill_section_lint
 wikify.patches.v0_5.backfill_section_references
+wikify.patches.v1_0.backfill_canonical_verdict

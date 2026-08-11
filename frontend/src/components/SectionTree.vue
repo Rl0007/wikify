@@ -4,6 +4,7 @@ import { Badge, Button, Dropdown, Tree, dialog, useCall, useList, toast } from "
 import { Splitpanes, Pane } from "splitpanes";
 import "splitpanes/dist/splitpanes.css";
 import WikiPreview from "@/components/WikiPreview.vue";
+import { useIsNarrow } from "@/composables/useMediaQuery";
 import { setSection } from "@/data/agentContext";
 
 const props = defineProps({
@@ -107,8 +108,17 @@ watch(
 
 const selectedName = ref(null);
 const selected = computed(() => byName.value[selectedName.value] || null);
+
+// Narrow screens drill down instead of splitting: the tree fills the width, tapping a
+// section swaps in its preview, Back returns. Swapping the Splitpanes host for a plain
+// <div> keeps one copy of the markup rather than forking a phone-only template.
+const isNarrow = useIsNarrow();
+const showPreview = ref(!!props.initialSection);
+const SplitHost = computed(() => (isNarrow.value ? "div" : Splitpanes));
+const SplitPane = computed(() => (isNarrow.value ? "div" : Pane));
 function onSelect(name) {
 	selectedName.value = name;
+	showPreview.value = true;
 }
 
 // Attach the selected section as the agent's default context (swaps out any page chip).
@@ -235,6 +245,12 @@ function onRemove(node) {
 
 // --- Approve & build graph -----------------------------------------------------------
 const isGraphed = computed(() => props.status === "Graphed");
+// "Approve & Build Graph" pushes the toolbar past a phone's width; the shorter label
+// says the same thing next to the section count it sits beside.
+const graphLabel = computed(() => {
+	if (isGraphed.value) return "Rebuild graph";
+	return isNarrow.value ? "Build graph" : "Approve & Build Graph";
+});
 async function buildGraph() {
 	try {
 		await graph.submit({ import_name: props.importName });
@@ -258,11 +274,18 @@ async function buildGraph() {
 			No sections yet — parse the document to build its tree.
 		</p>
 
-		<Splitpanes v-else class="h-full">
+		<component :is="SplitHost" v-else :class="isNarrow ? 'flex h-full flex-col' : 'h-full'">
 			<!-- Left: the editable section tree -->
-			<Pane :size="40" :min-size="25" class="flex flex-col border-r border-outline-gray-1">
+			<component
+				:is="SplitPane"
+				v-show="!isNarrow || !showPreview"
+				:size="isNarrow ? undefined : 40"
+				:min-size="isNarrow ? undefined : 25"
+				class="flex flex-col"
+				:class="isNarrow ? 'min-h-0 flex-1' : 'border-r border-outline-gray-1'"
+			>
 				<div
-					class="flex items-center gap-2 border-b border-outline-gray-1 px-3 py-2 text-sm text-ink-gray-6"
+					class="flex flex-wrap items-center gap-2 border-b border-outline-gray-1 px-3 py-2 text-sm text-ink-gray-6"
 				>
 					<span class="font-medium text-ink-gray-8">Sections</span>
 					<Badge :label="String(sectionCount)" theme="gray" variant="subtle" size="sm" />
@@ -275,15 +298,17 @@ async function buildGraph() {
 					/>
 					<span v-if="mutating" class="text-xs text-ink-gray-4">Saving…</span>
 					<Button
-						class="ml-auto"
+						class="ml-auto shrink-0"
 						size="sm"
 						variant="solid"
-						:label="isGraphed ? 'Rebuild graph' : 'Approve & Build Graph'"
+						:label="graphLabel"
 						:loading="graph.loading"
 						@click="buildGraph"
 					/>
 				</div>
-				<div class="flex-1 overflow-auto p-2">
+				<!-- A tighter indent on narrow screens: ICAI titles run to 140 chars and every
+				     nesting step is width the title no longer gets. -->
+				<div class="flex-1 overflow-auto p-2 [--tree-indent:14px] lg:[--tree-indent:24px]">
 					<Tree
 						:nodes="tree"
 						node-key="name"
@@ -330,7 +355,7 @@ async function buildGraph() {
 									@click.stop="onSelect(node.name)"
 								>
 									<span
-										class="truncate text-sm"
+										class="min-w-0 truncate text-sm"
 										:class="
 											node.include_in_wiki
 												? 'text-ink-gray-8'
@@ -338,12 +363,16 @@ async function buildGraph() {
 										"
 										>{{ node.title }}</span
 									>
+									<!-- The type is one of several chips competing with a 140-char
+									     title; on narrow screens the title wins (Explore groups
+									     by type anyway). -->
 									<Badge
 										v-if="node.section_type"
 										:label="node.section_type"
 										theme="blue"
 										variant="subtle"
 										size="sm"
+										class="hidden lg:inline-flex"
 									/>
 									<Badge
 										v-if="node.lint_count"
@@ -362,9 +391,11 @@ async function buildGraph() {
 									>
 								</button>
 
+								<!-- Touch has no hover, so the row menu stays visible on narrow
+								     screens instead of being hover-revealed. -->
 								<Dropdown :options="rowActions(node)" placement="right">
 									<button
-										class="shrink-0 rounded p-0.5 text-ink-gray-5 opacity-0 hover:bg-surface-gray-3 group-hover:opacity-100"
+										class="shrink-0 rounded p-0.5 text-ink-gray-5 hover:bg-surface-gray-3 lg:opacity-0 lg:group-hover:opacity-100"
 										@click.stop
 									>
 										<span
@@ -377,12 +408,23 @@ async function buildGraph() {
 						</template>
 					</Tree>
 				</div>
-			</Pane>
+			</component>
 
 			<!-- Right: wiki-fidelity preview of the selected section -->
-			<Pane :size="60" class="flex flex-col">
-				<WikiPreview :section="selectedName" @navigate="onSelect" />
-			</Pane>
-		</Splitpanes>
+			<component
+				:is="SplitPane"
+				v-show="!isNarrow || showPreview"
+				:size="isNarrow ? undefined : 60"
+				class="flex flex-col"
+				:class="isNarrow ? 'min-h-0 flex-1' : ''"
+			>
+				<WikiPreview
+					:section="selectedName"
+					:show-back="isNarrow"
+					@navigate="onSelect"
+					@back="showPreview = false"
+				/>
+			</component>
+		</component>
 	</div>
 </template>

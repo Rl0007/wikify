@@ -1,7 +1,6 @@
 <script setup>
 import {
 	BottomSheet,
-	Button,
 	DesktopShell,
 	MobileNav,
 	MobileNavItem,
@@ -9,7 +8,7 @@ import {
 	Sidebar,
 } from "frappe-ui";
 import { computed, onMounted, ref, watch } from "vue";
-import { useRoute } from "vue-router";
+import { RouterLink, useRoute } from "vue-router";
 import { useTheme } from "@/utils/useTheme";
 import { useIsMobile } from "@/composables/useIsMobile";
 import { session } from "@/data/session";
@@ -22,6 +21,8 @@ const isMobile = useIsMobile();
 
 const settingsOpen = ref(false);
 const mobileMenuOpen = ref(false);
+// The agent panel is mounted once here so it's available on every screen (slice 12).
+const agentOpen = ref(false);
 
 const menuItems = computed(() => [
 	{
@@ -51,21 +52,48 @@ const header = computed(() => ({
 const PROJECT_ROUTES = ["Projects", "ProjectDetail", "ProjectSettings", "ImportDetail"];
 const projectsActive = computed(() => PROJECT_ROUTES.includes(route.name));
 
+// One list of destinations drives the desktop sidebar AND the mobile navigation, so a
+// screen can never be reachable on one and unreachable on the other.
+const destinations = computed(() => [
+	{
+		label: "Projects",
+		icon: "lucide-folder",
+		to: { name: "Projects" },
+		isActive: projectsActive.value,
+	},
+	{
+		label: "Explore",
+		icon: "lucide-shapes",
+		to: { name: "Explore" },
+		isActive: route.name === "Explore",
+	},
+	{
+		label: "Ask",
+		icon: "lucide-message-circle-question",
+		to: { name: "AskWiki" },
+		isActive: route.name === "AskWiki",
+	},
+	{
+		label: "RAG Lab",
+		icon: "lucide-flask-conical",
+		to: { name: "RagLab" },
+		isActive: route.name === "RagLab",
+	},
+]);
+
+// The assistant is an action, not a route, so it gets its own group under the
+// destinations. It used to be a floating button pinned to the viewport corner, which
+// covered card actions ("Open in wiki") on every screen narrower than a desktop.
 const sections = computed(() => [
+	{ label: "", items: destinations.value },
 	{
 		label: "",
 		items: [
 			{
-				label: "Projects",
-				icon: "lucide-folder",
-				to: { name: "Projects" },
-				isActive: projectsActive.value,
-			},
-			{
-				label: "Explore",
-				icon: "lucide-shapes",
-				to: { name: "Explore" },
-				isActive: route.name === "Explore",
+				label: "Assistant",
+				icon: "lucide-sparkles",
+				active: agentOpen.value,
+				onClick: () => (agentOpen.value = true),
 			},
 		],
 	},
@@ -78,10 +106,6 @@ const pageScroll = computed(() => !FIXED_HEIGHT_ROUTES.includes(route.name));
 
 const collapsed = ref(localStorage.getItem("sidebar-collapsed") === "true");
 watch(collapsed, (v) => localStorage.setItem("sidebar-collapsed", v));
-
-// The agent panel + its floating button are mounted once here so they're available on
-// every screen (slice 12). On mobile the floating button is replaced by a MobileNav tab.
-const agentOpen = ref(false);
 
 function runMenuItem(item) {
 	mobileMenuOpen.value = false;
@@ -113,15 +137,23 @@ onMounted(initializeTheme);
 						:active="route.name === 'Explore'"
 					/>
 					<MobileNavItem
+						label="Ask"
+						icon="lucide-message-circle-question"
+						:to="{ name: 'AskWiki' }"
+						:active="route.name === 'AskWiki'"
+					/>
+					<MobileNavItem
 						label="Assistant"
 						icon="lucide-sparkles"
 						:active="agentOpen"
 						@click="agentOpen = true"
 					/>
+					<!-- Five tabs is the most that stays legible at 360px, so the least-used
+					     destination (RAG Lab) lives one tap deeper, inside this sheet. -->
 					<MobileNavItem
-						label="Menu"
+						label="More"
 						icon="lucide-menu"
-						:active="mobileMenuOpen"
+						:active="mobileMenuOpen || route.name === 'RagLab'"
 						@click="mobileMenuOpen = true"
 					/>
 				</MobileNav>
@@ -151,9 +183,27 @@ onMounted(initializeTheme);
 
 		<AppSettingsDialog v-model:open="settingsOpen" />
 
-		<!-- Mobile overflow menu (settings / theme / logout). -->
+		<!-- Mobile overflow sheet: the destinations that don't fit the tab bar, then the
+		     user actions (settings / theme / logout). -->
 		<BottomSheet v-model:open="mobileMenuOpen" title="Wikify">
 			<div class="flex flex-col px-2 pb-6">
+				<RouterLink
+					v-for="destination in destinations"
+					:key="destination.label"
+					:to="destination.to"
+					class="flex items-center gap-3 rounded-md px-3 py-3 text-base active:bg-surface-gray-2"
+					:class="destination.isActive ? 'text-ink-gray-9' : 'text-ink-gray-8'"
+					@click="mobileMenuOpen = false"
+				>
+					<span
+						:class="[destination.icon, 'size-5 text-ink-gray-6']"
+						aria-hidden="true"
+					/>
+					{{ destination.label }}
+				</RouterLink>
+
+				<div class="my-2 border-t border-outline-gray-1" />
+
 				<button
 					v-for="item in menuItems"
 					:key="item.label"
@@ -166,16 +216,6 @@ onMounted(initializeTheme);
 			</div>
 		</BottomSheet>
 
-		<!-- Floating assistant button (desktop only — mobile uses the nav tab). -->
-		<Button
-			v-if="!isMobile"
-			v-show="!agentOpen"
-			variant="solid"
-			icon="lucide-sparkles"
-			class="fixed bottom-5 right-5 z-30 !size-11 !rounded-full shadow-lg"
-			tooltip="Ask the assistant"
-			@click="agentOpen = true"
-		/>
 		<AgentChatPanel v-model:open="agentOpen" />
 	</div>
 </template>

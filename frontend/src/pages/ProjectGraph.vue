@@ -59,7 +59,7 @@ function onSelect(node) {
 					>{{ project.doc?.project_name || props.name }}
 					<span class="text-ink-gray-4" aria-hidden="true">/</span></RouterLink
 				>
-				<h1 class="text-md text-ink-gray-9">Graph</h1>
+				<h1 class="shrink-0 text-md text-ink-gray-9">Graph</h1>
 			</div>
 		</PageHeader>
 

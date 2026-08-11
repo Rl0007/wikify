@@ -32,10 +32,10 @@ class Tool:
 
 def build_default_registry() -> dict[str, Tool]:
 	"""All available tools, keyed by name (read + write/reparse/pipeline/converse)."""
-	from wikify.agent.tools import content, converse, pipeline, read, reparse, taxonomy, tree
+	from wikify.agent.tools import content, converse, pipeline, read, reparse, retrieve, taxonomy, tree
 
 	registry: dict[str, Tool] = {}
-	for module in (read, tree, taxonomy, content, reparse, pipeline, converse):
+	for module in (read, retrieve, tree, taxonomy, content, reparse, pipeline, converse):
 		for tool in module.TOOLS:
 			registry[tool.name] = tool
 	return registry

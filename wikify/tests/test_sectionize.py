@@ -10,7 +10,8 @@ from frappe.tests.utils import FrappeTestCase
 
 from wikify.engine import parse_pdf, remediate_pdf
 from wikify.engine.loader.cleanup import clean_pages, strip_outer_markdown_fence
-from wikify.engine.loader.sectionizer import sectionize
+from wikify.engine.loader.sectionizer import MAX_TITLE_LENGTH, running_header_titles, sectionize
+from wikify.rag.chunk import build_chunks
 from wikify.tests.test_parse_pipeline import _make_sample_pdf
 from wikify.tests.test_remediate_pipeline import _MERMAID, _fake_chat
 
@@ -127,6 +128,60 @@ class TestSectionizer(FrappeTestCase):
 		self.assertIn("real body", cleaned[1])
 		self.assertIn("more body", cleaned[2])
 
+	def test_title_is_clipped_to_the_storable_length(self):
+		# An over-length title aborted `replace_sections` mid-loop with
+		# CharacterLengthExceededError, dropping every later section (ICAI: pages 20-236).
+		long_title = "DETERMINATION OF RESIDENTIAL STATUS OF " + "HINDU UNDIVIDED FAMILY " * 8
+		secs = sectionize([(1, f"## {long_title}\nbody")])
+		self.assertLessEqual(len(secs[0].title), MAX_TITLE_LENGTH)
+		self.assertTrue(secs[0].title.endswith("…"))
+		self.assertTrue(secs[0].title.startswith("DETERMINATION OF RESIDENTIAL STATUS"))
+		self.assertNotIn(" …", secs[0].title)  # clipped on a word boundary, no dangling space
+
+	def test_clipped_title_fits_the_data_column(self):
+		# The loader is frappe-free, so its mirror of the Data column cap is pinned here.
+		self.assertEqual(MAX_TITLE_LENGTH, frappe.db.VARCHAR_LEN)
+
+	def test_long_titled_sections_all_reach_the_database(self):
+		# The regression that mattered: every section after the long heading survived.
+		pages = [
+			(1, "## Chapter One\nfirst"),
+			(2, f"## {'X' * 200}\nsecond"),
+			(3, "## Chapter Three\nthird"),
+		]
+		secs = sectionize(pages)
+		self.assertEqual(len(secs), 3)
+		self.assertEqual(secs[-1].title, "Chapter Three")
+		self.assertEqual(max(s.page_end for s in secs), 3)
+
+	def test_running_page_header_opens_one_section_not_one_per_page(self):
+		# An unnumbered chapter header re-stamped at the top of every page is furniture
+		# after its first appearance — the body of later pages continues the open section.
+		pages = [
+			(1, "# TRANSFER PRICING\n## Arm's Length Price\nalp body"),
+			(2, "# TRANSFER PRICING\nmore alp body"),
+			(3, "# TRANSFER PRICING\nstill more alp body"),
+		]
+		secs = sectionize(pages)
+		self.assertEqual([s.title for s in secs], ["TRANSFER PRICING", "Arm's Length Price"])
+		alp = secs[1]
+		self.assertEqual(alp.page_end, 3)
+		self.assertIn("still more alp body", alp.markdown)
+		# The header text itself is dropped, not folded into the body.
+		self.assertNotIn("TRANSFER PRICING", alp.markdown)
+
+	def test_heading_repeated_mid_page_is_not_a_running_header(self):
+		# Repetition alone isn't the signal — a genuine heading deep in the page stays.
+		pages = [
+			(page, f"## Chapter {page}\nlead in\nfiller\nfiller\n## Notes\nnote body") for page in (1, 2, 3)
+		]
+		self.assertNotIn("Notes", running_header_titles(pages))
+		self.assertEqual(len([s for s in sectionize(pages) if s.title == "Notes"]), 3)
+
+	def test_heading_on_two_pages_is_not_a_running_header(self):
+		pages = [(1, "# Intro\na"), (2, "# Intro\nb")]
+		self.assertEqual(running_header_titles(pages), set())
+
 	def test_clean_pages_keeps_data_row_mentioning_approved_by_once(self):
 		# A genuine data row that merely mentions one sign-off phrase is NOT furniture.
 		table = "| Step | Status |\n|---|---|\n| Reviewed and approved by committee | done |"
@@ -134,6 +189,37 @@ class TestSectionizer(FrappeTestCase):
 		cleaned = dict(clean_pages(pages))
 		self.assertIn("approved by committee", cleaned[1])
 		self.assertIn("|---|---|", cleaned[1])  # the real table separator survives
+
+
+class TestEmptySectionsAreFlagged(FrappeTestCase):
+	"""A breadcrumb section with no body is indexed, but flagged out of the ranking legs."""
+
+	def test_section_without_markdown_is_chunked_as_title_only(self):
+		rows = [
+			{
+				"name": "SEC-EMPTY",
+				"source_document": "SD-1",
+				"title": "Concessional tax rates under section 115BAC(1A)",
+				"hierarchy_path": "Basic Concepts",
+				"markdown": "",
+				"page_start": 8,
+				"page_end": 8,
+			},
+			{
+				"name": "SEC-BODY",
+				"source_document": "SD-1",
+				"title": "Conditions",
+				"hierarchy_path": "Basic Concepts > Conditions",
+				"markdown": "The conditions are as follows.",
+				"page_start": 8,
+				"page_end": 8,
+			},
+		]
+		chunks = build_chunks(rows, {"SD-1": {"title": "Referencer", "project": "PRJ-1"}}, {})
+		self.assertEqual([chunk.section for chunk in chunks], ["SEC-EMPTY", "SEC-BODY"])
+		self.assertEqual([chunk.title_only for chunk in chunks], [True, False])
+		# The flagged row carries its title so a filter-mode citation still reads as something.
+		self.assertEqual(chunks[0].text, "Concessional tax rates under section 115BAC(1A)")
 
 
 class TestSectionizeIntegration(FrappeTestCase):

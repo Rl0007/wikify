@@ -12,7 +12,7 @@ from pathlib import Path
 
 import fitz  # PyMuPDF
 
-from wikify.engine import config
+from wikify.engine import config, regions
 
 
 def png_to_data_url(png_bytes: bytes) -> str:
@@ -26,20 +26,22 @@ def png_to_data_url(png_bytes: bytes) -> str:
 
 
 def classify_page(
-	page, min_chars: int = config.VISUAL_MIN_CHARS, min_drawings: int = config.VISUAL_MIN_DRAWINGS
+	page,
+	min_chars: int = config.VISUAL_MIN_CHARS,
+	min_drawings: int = config.VISUAL_MIN_DRAWINGS,
+	page_regions: list | None = None,
 ) -> str:
-	"""Heuristic page type. Visual = diagram/flowchart/image-dominant, where the
-	extractable text is too sparse to use as ground truth. Thresholds default to the
-	`engine.config` constants; the live pipeline passes the `Wikify Settings` values."""
-	nchars = len(page.get_text("text").strip())
-	n_images = len(page.get_images())
-	try:
-		n_drawings = len(page.get_drawings())
-	except Exception:
-		n_drawings = 0
-	if nchars < min_chars and (n_images > 0 or n_drawings >= min_drawings):
-		return "visual"
-	return "text"
+	"""Page type: `visual` | `mixed` | `text`.
+
+	The original rule was `chars < min_chars AND drawings >= min_drawings`, written for
+	scanned pages. On a born-digital diagram-heavy manual every page has both a full text
+	layer and heavy vector art, so the conjunction never fired and 235 of 236 ICAI pages were
+	filed `text` — the visual path was unreachable. `regions.classify_page` answers it from the
+	page's shape regions instead, and adds `mixed`: a trustworthy text layer *plus* substantial
+	table/diagram ink, which needs a vision model to recover structure but must go on being
+	scored against its text layer. Callers pass `page_regions` when they already have them.
+	"""
+	return regions.classify_page(page, min_chars, min_drawings, page_regions)
 
 
 def render_png(page, dpi: int = config.RENDER_DPI) -> bytes:

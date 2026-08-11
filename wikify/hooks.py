@@ -146,13 +146,21 @@ after_install = "wikify.install.after_install"
 # ---------------
 # Hook on document methods and events
 
-# doc_events = {
-# 	"*": {
-# 		"on_update": "method",
-# 		"on_cancel": "method",
-# 		"on_trash": "method"
-# 	}
-# }
+# The content chain `Source Page.canonical_markdown → Source Section.markdown → chunks →
+# index` copies at every link, so a fix that stops at one link leaves the rest serving the
+# old text. Page edits propagate into the covering sections; section edits make the
+# project's index stale. Both handlers coalesce into one queued job so a bulk pass writing
+# hundreds of rows doesn't storm the long queue — see `wikify/rag/events.py`.
+doc_events = {
+	"Source Page": {
+		"on_update": "wikify.rag.events.queue_page_propagation",
+	},
+	"Source Section": {
+		"after_insert": "wikify.rag.events.queue_reindex",
+		"on_update": "wikify.rag.events.queue_reindex",
+		"on_trash": "wikify.rag.events.queue_reindex",
+	},
+}
 
 # Scheduled Tasks
 # ---------------

@@ -1,0 +1,190 @@
+{
+ "actions": [],
+ "allow_rename": 0,
+ "autoname": "hash",
+ "creation": "2026-08-10 00:00:00",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "session",
+  "role",
+  "turn",
+  "content",
+  "route_section",
+  "route_intent",
+  "route_section_type",
+  "column_break_route",
+  "route_reason",
+  "refused",
+  "sources_section",
+  "citations",
+  "cost_section",
+  "model",
+  "took_ms",
+  "column_break_cost",
+  "prompt_tokens",
+  "completion_tokens",
+  "cost"
+ ],
+ "fields": [
+  {
+   "fieldname": "session",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "Session",
+   "options": "Wikify Ask Session",
+   "reqd": 1,
+   "search_index": 1
+  },
+  {
+   "fieldname": "role",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Role",
+   "options": "question\nanswer",
+   "reqd": 1
+  },
+  {
+   "default": "0",
+   "description": "Pairs the question row with its answer row, so an eval query joins a turn on one integer instead of on creation order.",
+   "fieldname": "turn",
+   "fieldtype": "Int",
+   "label": "Turn",
+   "non_negative": 1
+  },
+  {
+   "fieldname": "content",
+   "fieldtype": "Long Text",
+   "label": "Content"
+  },
+  {
+   "fieldname": "route_section",
+   "fieldtype": "Section Break",
+   "label": "Routing"
+  },
+  {
+   "description": "Which retrieval leg the router chose. Indexed: \"which questions did we route wrong\" is the primary eval query.",
+   "fieldname": "route_intent",
+   "fieldtype": "Select",
+   "in_standard_filter": 1,
+   "label": "Route Intent",
+   "options": "\nexhaustive\nsemantic\nhybrid",
+   "search_index": 1
+  },
+  {
+   "fieldname": "route_section_type",
+   "fieldtype": "Link",
+   "in_standard_filter": 1,
+   "label": "Route Section Type",
+   "options": "Section Type"
+  },
+  {
+   "fieldname": "column_break_route",
+   "fieldtype": "Column Break"
+  },
+  {
+   "description": "The one-line justification shown in the interface.",
+   "fieldname": "route_reason",
+   "fieldtype": "Small Text",
+   "label": "Route Reason"
+  },
+  {
+   "default": "0",
+   "description": "The answer refused because nothing retrieved cleared the score floor.",
+   "fieldname": "refused",
+   "fieldtype": "Check",
+   "in_standard_filter": 1,
+   "label": "Refused"
+  },
+  {
+   "fieldname": "sources_section",
+   "fieldtype": "Section Break",
+   "label": "Sources"
+  },
+  {
+   "description": "The cited Hit dicts (JSON) exactly as the interface rendered them — kept so a later pass can ask which sources an answer actually stood on.",
+   "fieldname": "citations",
+   "fieldtype": "Long Text",
+   "label": "Citations"
+  },
+  {
+   "fieldname": "cost_section",
+   "fieldtype": "Section Break",
+   "label": "Cost"
+  },
+  {
+   "fieldname": "model",
+   "fieldtype": "Data",
+   "in_standard_filter": 1,
+   "label": "Model"
+  },
+  {
+   "fieldname": "took_ms",
+   "fieldtype": "Int",
+   "label": "Took (ms)",
+   "non_negative": 1
+  },
+  {
+   "fieldname": "column_break_cost",
+   "fieldtype": "Column Break"
+  },
+  {
+   "default": "0",
+   "fieldname": "prompt_tokens",
+   "fieldtype": "Int",
+   "label": "Prompt Tokens",
+   "non_negative": 1
+  },
+  {
+   "default": "0",
+   "fieldname": "completion_tokens",
+   "fieldtype": "Int",
+   "label": "Completion Tokens",
+   "non_negative": 1
+  },
+  {
+   "default": "0",
+   "description": "LLM spend (USD) for this one ask, summed across routing, rerank and synthesis.",
+   "fieldname": "cost",
+   "fieldtype": "Float",
+   "in_list_view": 1,
+   "label": "Cost (USD)",
+   "non_negative": 1,
+   "precision": "6"
+  }
+ ],
+ "index_web_pages_for_search": 1,
+ "links": [],
+ "modified": "2026-08-10 00:00:00",
+ "modified_by": "Administrator",
+ "module": "Wikify",
+ "name": "Wikify Ask Message",
+ "naming_rule": "Random",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "create": 1,
+   "delete": 1,
+   "if_owner": 1,
+   "read": 1,
+   "role": "All",
+   "write": 1
+  }
+ ],
+ "sort_field": "creation",
+ "sort_order": "ASC",
+ "states": []
+}

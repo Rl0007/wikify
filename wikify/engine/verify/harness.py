@@ -39,7 +39,10 @@ def _composite(terms: dict, weights: dict) -> float:
 	return round(sum(weights[k] * active[k] for k in active) / total_w, 3)
 
 
-def _verdict(composite: float) -> str:
+def get_verdict(composite: float) -> str:
+	"""The pass/escalate/review badge for a composite score. Public because the verdict
+	must follow whichever composite the user is actually reading — `store.set_canonical`
+	re-derives it from the canonical composite once a remediation is adopted."""
 	if composite >= float(settings.get("pass_threshold")):
 		return "pass"
 	if composite >= float(settings.get("escalate_threshold")):
@@ -116,7 +119,7 @@ def score_page(
 		table_score=None if tscore is None else round(tscore, 3),
 		judge_score=judge_score,
 		composite=composite,
-		verdict=_verdict(composite),
+		verdict=get_verdict(composite),
 		kind=page_kind,
 		notes=notes,
 	)

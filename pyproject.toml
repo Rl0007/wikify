@@ -12,6 +12,8 @@ dependencies = [
     "pymupdf>=1.24",        # fitz: render pages to PNG + ground-truth text
     "pymupdf4llm>=0.0.17",  # baseline page -> markdown parse
     "litellm>=1.55",        # agent LLM client (streaming tool-calling via OpenRouter)
+    "lancedb>=0.36",        # embedded vector + FTS store for retrieval (no server)
+    "model2vec>=0.7",       # static sentence embeddings (numpy-only; no torch)
 ]
 
 [build-system]

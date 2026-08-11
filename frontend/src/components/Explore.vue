@@ -3,11 +3,15 @@ import { computed, ref, watch, onMounted, onUnmounted } from "vue";
 import { Badge, Button, useCall, toast } from "frappe-ui";
 import { useSocket } from "@/socket";
 import TypeChip from "@/components/TypeChip.vue";
+import { useIsMobile } from "@/composables/useIsMobile";
+import { actionButtonProps } from "@/utils/actionButton";
 
 const props = defineProps({
 	sourceDocument: { type: String, default: null },
 	importName: { type: String, default: null },
 });
+
+const isMobile = useIsMobile();
 
 // Fetches are driven explicitly via watchers (reactive `auto` on useCall is unreliable
 // when the dep flips — the Slice 4 gotcha), so both calls are immediate:false + submit.
@@ -105,8 +109,8 @@ function pageRange(s) {
 <template>
 	<div class="flex h-full flex-col">
 		<!-- Chip bar + reclassify -->
-		<div class="flex items-center gap-2 border-b border-outline-gray-1 px-3 py-2">
-			<div class="flex flex-1 flex-wrap items-center gap-1.5">
+		<div class="flex items-start gap-2 border-b border-outline-gray-1 px-3 py-2">
+			<div class="flex min-w-0 flex-1 flex-wrap items-center gap-1.5">
 				<TypeChip
 					v-for="t in chips"
 					:key="t.type_name"
@@ -123,8 +127,14 @@ function pageRange(s) {
 			<Button
 				size="sm"
 				variant="subtle"
-				icon-left="lucide-tags"
-				:label="reclassifying ? 'Classifying…' : 'Reclassify'"
+				class="shrink-0"
+				v-bind="
+					actionButtonProps(
+						isMobile,
+						'lucide-tags',
+						reclassifying ? 'Classifying…' : 'Reclassify'
+					)
+				"
 				:loading="reclassifying"
 				:disabled="reclassifying"
 				@click="runReclassify"
@@ -149,14 +159,17 @@ function pageRange(s) {
 					<p class="truncate text-base text-ink-gray-8">{{ s.title }}</p>
 					<p class="truncate text-xs text-ink-gray-5">{{ s.hierarchy_path }}</p>
 				</div>
-				<Badge
-					v-if="pageRange(s)"
-					:label="pageRange(s)"
-					theme="gray"
-					variant="subtle"
-					size="sm"
-					class="w-20 shrink-0 justify-end"
-				/>
+				<!-- The badge sizes to its text inside a fixed column, so it reads as a chip
+				     rather than an 80px pill with the range shoved to one end. -->
+				<span class="flex w-20 shrink-0 justify-end">
+					<Badge
+						v-if="pageRange(s)"
+						:label="pageRange(s)"
+						theme="gray"
+						variant="subtle"
+						size="sm"
+					/>
+				</span>
 			</div>
 			<p
 				v-if="!sections.length && selectedType && !results.loading"

@@ -19,67 +19,82 @@ SECTION_TYPES: list[tuple[str, str, str, str]] = [
 		"staff_roles_and_responsibilities",
 		"Staff Roles & Responsibilities",
 		"#3b82f6",
-		"Job descriptions, role definitions, duties, reporting lines, and org structure.",
+		"Job descriptions and role profiles — one section per post: purpose of the role, "
+		"duties, reporting and supervision lines, required qualifications and licences, "
+		"and the staffing structure.",
 	),
 	(
 		"clinical_protocols",
 		"Clinical Protocols",
 		"#10b981",
-		"Clinical guidelines, care pathways, assessment and treatment protocols.",
+		"Clinical guidelines and care pathways — assessment, risk scoring, treatment steps, "
+		"escalation thresholds and review intervals for a named condition.",
 	),
 	(
 		"surgical_procedures",
 		"Surgical Procedures",
 		"#ef4444",
-		"Operative techniques, surgical steps, peri-operative and theatre procedures.",
+		"Operative and theatre practice — surgical steps, peri-operative checklists, swab "
+		"and instrument counts, and recovery.",
 	),
 	(
 		"patient_management",
 		"Patient Management",
 		"#8b5cf6",
-		"Admission, triage, monitoring, discharge, and ongoing patient-care management.",
+		"The patient or client journey — referral, admission, triage, care planning, "
+		"monitoring, review and discharge.",
 	),
 	(
 		"medication_management",
 		"Medication Management",
 		"#f59e0b",
-		"Prescribing, dosing, administration, storage, and reconciliation of medicines.",
+		"Medicines handling — prescribing, dosing, administration, controlled drugs, "
+		"storage, repeat prescriptions and reconciliation.",
 	),
 	(
 		"administrative_policies",
 		"Administrative Policies",
 		"#64748b",
-		"Governance, HR, finance, scheduling, and other non-clinical administrative policy.",
+		"Non-clinical policy sections — pay bands and salary scales, overtime, on-call and "
+		"unsocial-hours payments, pension, leave and other benefits, expenses and mileage, "
+		"working-hours and rota rules, and HR or finance governance.",
 	),
 	(
 		"equipment_and_facilities",
 		"Equipment & Facilities",
 		"#14b8a6",
-		"Devices, instruments, maintenance, supplies, and facility/environment management.",
+		"Devices, instruments and consumables — checks, maintenance, decontamination, "
+		"stock control, and the physical environment.",
 	),
 	(
 		"training_and_audits",
 		"Training & Audits",
 		"#ec4899",
-		"Education, competencies, induction, quality audits, and compliance reviews.",
+		"Becoming and staying competent — induction, mandatory training, competency "
+		"frameworks and sign-off, preceptorship, appraisal, and the audit and compliance cycle.",
 	),
 	(
 		"research_and_documentation",
 		"Research & Documentation",
 		"#6366f1",
-		"Research methods, evidence, record-keeping, forms, and documentation standards.",
+		"Evidence and record-keeping — research methods, references, forms, templates and "
+		"documentation standards.",
 	),
 	(
 		"emergency_procedures",
 		"Emergency Procedures",
 		"#f97316",
-		"Resuscitation, escalation, codes, and other urgent/emergency response procedures.",
+		"Urgent response — resuscitation, emergency calls and escalation, major incident "
+		"plans and other time-critical procedures.",
 	),
 	(
 		"other",
 		"Other",
 		"#9ca3af",
-		"Anything that does not fit the categories above (the catch-all).",
+		"Organisation overviews and front matter — who the provider is, its mission and "
+		"values, its sites, the services it offers and its size (beds, list size, annual "
+		'activity). An "about this organisation" or "who we are" section lives here, as '
+		"does anything that fits no category above.",
 	),
 ]
 

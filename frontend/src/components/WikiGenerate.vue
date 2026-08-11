@@ -150,6 +150,13 @@ function pageRange(n) {
 	return n.page_start === n.page_end ? `p${n.page_start}` : `p${n.page_start}–${n.page_end}`;
 }
 
+// Past four levels the indent costs more title than the extra nesting communicates —
+// at phone width a depth-8 row would have nothing left to show its label in.
+const MAX_INDENT_DEPTH = 4;
+function rowIndent(depth) {
+	return `${Math.min(depth, MAX_INDENT_DEPTH) * 1.25 + 0.5}rem`;
+}
+
 // Clicking a projected node opens the same wiki preview as the Tree tab.
 const previewSection = ref(null);
 const previewOpen = computed({
@@ -191,9 +198,11 @@ onUnmounted(() => {
 			</div>
 		</div>
 
-		<div v-else class="flex min-h-0 flex-1">
+		<div v-else class="flex min-h-0 flex-1 flex-col lg:flex-row">
 			<!-- Left: target + actions -->
-			<div class="flex w-80 shrink-0 flex-col gap-4 border-r border-outline-gray-1 p-4">
+			<div
+				class="flex shrink-0 flex-col gap-4 border-b border-outline-gray-1 p-4 lg:w-80 lg:border-r lg:border-b-0"
+			>
 				<div>
 					<p class="text-sm font-medium text-ink-gray-8">Generate wiki</p>
 					<p class="mt-0.5 text-xs text-ink-gray-5">
@@ -266,7 +275,7 @@ onUnmounted(() => {
 			<!-- Right: preview of what will be generated -->
 			<div class="flex min-h-0 flex-1 flex-col">
 				<div
-					class="flex items-center gap-2 border-b border-outline-gray-1 px-4 py-2 text-sm text-ink-gray-6"
+					class="flex flex-wrap items-center gap-2 border-b border-outline-gray-1 px-4 py-2 text-sm text-ink-gray-6"
 				>
 					<span class="font-medium text-ink-gray-8">Preview</span>
 					<Badge
@@ -305,7 +314,7 @@ onUnmounted(() => {
 						:key="row.name"
 						type="button"
 						class="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left hover:bg-surface-gray-2"
-						:style="{ paddingLeft: `${row.depth * 1.25 + 0.5}rem` }"
+						:style="{ paddingLeft: rowIndent(row.depth) }"
 						@click="previewSection = row.name"
 					>
 						<span
@@ -313,7 +322,7 @@ onUnmounted(() => {
 							:class="row.is_group ? 'lucide-folder' : 'lucide-file-text'"
 							aria-hidden="true"
 						/>
-						<span class="truncate text-sm text-ink-gray-8">{{ row.title }}</span>
+						<span class="min-w-0 truncate text-sm text-ink-gray-8">{{ row.title }}</span>
 						<Badge
 							v-if="row.lint_count"
 							:label="`⚠ ${row.lint_count}`"
@@ -340,7 +349,7 @@ onUnmounted(() => {
 
 		<!-- Wiki preview of a projected node (same component as the Tree tab) -->
 		<Dialog v-model:open="previewOpen" size="4xl" bare>
-			<div class="h-[75vh]">
+			<div class="h-[70dvh] sm:h-[75vh]">
 				<WikiPreview :section="previewSection" @navigate="(n) => (previewSection = n)" />
 			</div>
 		</Dialog>

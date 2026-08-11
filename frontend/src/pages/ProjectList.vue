@@ -12,9 +12,12 @@ import {
 	useCall,
 	useList,
 } from "frappe-ui";
+import { useIsMobile } from "@/composables/useIsMobile";
+import { actionButtonProps } from "@/utils/actionButton";
 import { clear as clearAgentContext } from "@/data/agentContext";
 
 const router = useRouter();
+const isMobile = useIsMobile();
 
 // Global landing — the agent opens with no default attachment here.
 onMounted(clearAgentContext);
@@ -32,10 +35,10 @@ const projects = useList({
 // default is never archivable, so it always shows).
 const showArchived = ref(false);
 const visibleProjects = computed(() =>
-	(projects.data || []).filter((p) => showArchived.value || p.status !== "Archived")
+	(projects.data || []).filter((p) => showArchived.value || p.status !== "Archived"),
 );
 const archivedCount = computed(
-	() => (projects.data || []).filter((p) => p.status === "Archived").length
+	() => (projects.data || []).filter((p) => p.status === "Archived").length,
 );
 
 const showNew = ref(false);
@@ -73,19 +76,24 @@ function openProject(name) {
 	<div>
 		<PageHeader>
 			<h1 class="text-md text-ink-gray-9">Projects</h1>
-			<div class="flex items-center gap-2">
+			<div class="flex shrink-0 items-center gap-2 pl-2">
 				<Button
 					v-if="archivedCount"
 					variant="ghost"
 					theme="gray"
-					:label="showArchived ? 'Hide archived' : `Show archived (${archivedCount})`"
+					v-bind="
+						actionButtonProps(
+							isMobile,
+							'lucide-archive',
+							showArchived ? 'Hide archived' : `Show archived (${archivedCount})`
+						)
+					"
 					@click="showArchived = !showArchived"
 				/>
 				<Button
 					variant="solid"
 					theme="gray"
-					icon-left="lucide-plus"
-					label="New Project"
+					v-bind="actionButtonProps(isMobile, 'lucide-plus', 'New Project')"
 					@click="showNew = true"
 				/>
 			</div>

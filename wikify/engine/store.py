@@ -11,6 +11,8 @@ from __future__ import annotations
 import frappe
 from frappe.utils.file_manager import save_file
 
+from wikify.engine.verify.harness import get_verdict
+
 
 def create_document(
 	title: str,
@@ -158,10 +160,16 @@ def set_remediation(
 
 
 def set_canonical(page_name: str, markdown: str, composite: float | None, source: str) -> None:
-	"""Write a page's canonical (best-per-page) markdown + its composite + provenance."""
+	"""Write a page's canonical (best-per-page) markdown + its composite + provenance.
+
+	The verdict follows the canonical composite, not the baseline one: the badge has to
+	describe the content the user is actually reading, or a remediated page reads
+	"review 0.99". `composite` (baseline) stays on the row for audit.
+	"""
 	values = {"canonical_markdown": markdown, "canonical_source": source}
 	if composite is not None:
 		values["canonical_composite"] = composite
+		values["verdict"] = get_verdict(composite)
 	frappe.db.set_value("Source Page", page_name, values)
 
 

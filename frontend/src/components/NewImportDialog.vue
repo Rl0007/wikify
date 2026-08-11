@@ -95,7 +95,7 @@ function reset() {
 						@success="onUpload"
 					>
 						<template #default="{ openFileSelector, uploading, progress }">
-							<div class="flex items-center gap-3">
+							<div class="flex min-w-0 items-center gap-3">
 								<Button
 									:loading="uploading"
 									:label="
@@ -108,9 +108,11 @@ function reset() {
 									icon-left="lucide-upload"
 									@click="openFileSelector"
 								/>
-								<span v-if="pdfName" class="truncate text-sm text-ink-gray-7">{{
-									pdfName
-								}}</span>
+								<span
+									v-if="pdfName"
+									class="min-w-0 truncate text-sm text-ink-gray-7"
+									>{{ pdfName }}</span
+								>
 							</div>
 						</template>
 					</FileUploader>

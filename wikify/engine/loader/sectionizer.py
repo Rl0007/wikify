@@ -11,9 +11,23 @@ the boundary the ORM seam (`store.replace_sections`) consumes to build the tree.
 from __future__ import annotations
 
 import re
+from collections import defaultdict
 from dataclasses import dataclass
 
 from wikify.engine.loader.toc import correct_level
+
+# A title lands in `Source Section.title`, a Data column capped at `frappe.db.VARCHAR_LEN`.
+# An over-length title used to raise CharacterLengthExceededError mid-`replace_sections`,
+# aborting the rebuild and silently dropping every section after the offending heading —
+# on the 236-page ICAI referencer that cost pages 20-236 (93.6% of the document). The
+# loader stays frappe-free, so the limit is mirrored here and pinned by a test.
+MAX_TITLE_LENGTH = 140
+
+# A heading that reappears at the top of many pages is the chapter's running page header,
+# not a new section each time. Only the first occurrence opens a section; the repeats are
+# page furniture and are dropped so the body flows on into the open section.
+RUNNING_HEADER_MIN_PAGES = 3
+TOP_OF_PAGE_LINES = 3
 
 _HEADING_RE = re.compile(r"^(#{1,6})\s+(.*\S)\s*$")
 # Numbered headings ("1.", "1.1", "1.1.1") encode their own level — recover it.
@@ -28,7 +42,12 @@ def _clean_title(raw: str) -> str:
 	# wrapping bold/italic markers (`*` and `_`) so the tree title is plain text. This
 	# also helps level inference — `_**2.1 Foo**_` → `2.1 Foo` now matches the numbering
 	# regex — and stops a fully-bold numbered chapter being mis-demoted as a list item.
-	return raw.strip().strip("*_").strip()
+	title = raw.strip().strip("*_").strip()
+	if len(title) <= MAX_TITLE_LENGTH:
+		return title
+	clipped = title[: MAX_TITLE_LENGTH - 1]
+	head, _, _ = clipped.rpartition(" ")
+	return f"{(head or clipped).rstrip()}…"
 
 
 def _infer_level(title: str, fallback: int) -> int:
@@ -47,6 +66,37 @@ def _looks_like_list_item(title: str) -> bool:
 	"""A numbered 'heading' with a stray bold marker or double numbering is really
 	a list item the parser mis-read (e.g. '2. **Maternal...', '6. 3.1 Eclampsia')."""
 	return "*" in title or bool(_DOUBLE_NUM.match(title))
+
+
+def running_header_titles(pages: list[tuple[int, str]]) -> set[str]:
+	"""Cleaned heading titles that are really the chapter's running page header.
+
+	A section heading is written once; a running header is re-stamped at the top of every
+	page of its chapter, so the parser emits it as a fresh heading per page. Detected
+	structurally — same title heading pages, most of them within the first few non-blank
+	lines of the page — so no document-specific strings are needed.
+
+	# ponytail: repetition + top-of-page placement is the whole signal; a genuine heading
+	# that opens three or more short pages of its own (a glossary of one-term-per-page,
+	# say) would be misread as furniture — require the occurrences to carry no body of
+	# their own if such a corpus turns up.
+	"""
+	occurrences: dict[str, list[int]] = defaultdict(list)
+	pages_seen: dict[str, set[int]] = defaultdict(set)
+	for page_no, md in pages:
+		for position, line in enumerate(line for line in md.splitlines() if line.strip()):
+			match = _HEADING_RE.match(line)
+			if not match:
+				continue
+			title = _clean_title(match.group(2))
+			occurrences[title].append(position)
+			pages_seen[title].add(page_no)
+	return {
+		title
+		for title, positions in occurrences.items()
+		if len(pages_seen[title]) >= RUNNING_HEADER_MIN_PAGES
+		and sum(1 for position in positions if position < TOP_OF_PAGE_LINES) * 2 >= len(positions)
+	}
 
 
 @dataclass
@@ -68,6 +118,8 @@ def sectionize(pages: list[tuple[int, str]], level_map: dict[str, int] | None = 
 	current: Section | None = None
 	buf: list[str] = []
 	max_chapter = 0  # highest accepted top-level chapter number (sequence validation)
+	running_headers = running_header_titles(pages)
+	opened_headers: set[str] = set()
 
 	def flush():
 		if current is not None:
@@ -78,9 +130,17 @@ def sectionize(pages: list[tuple[int, str]], level_map: dict[str, int] | None = 
 		for line in md.splitlines():
 			m = _HEADING_RE.match(line)
 			if m:
+				title = _clean_title(m.group(2))
+				if title in running_headers:
+					# First stamp opens the chapter; every later one is page furniture and
+					# is dropped, so the page's body continues the section already open.
+					if title in opened_headers:
+						if current is not None:
+							current.page_end = page_no
+						continue
+					opened_headers.add(title)
 				flush()
 				buf = []
-				title = _clean_title(m.group(2))
 				# Embedded ToC wins; else numbering; else the parser's '#' depth.
 				level = correct_level(title, _infer_level(title, len(m.group(1))), level_map)
 				# Heading validation: a numbered top-level heading that is out of

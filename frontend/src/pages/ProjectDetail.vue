@@ -3,11 +3,15 @@ import { ref, watch } from "vue";
 import { Badge, Button, PageHeader, useDoc } from "frappe-ui";
 import ImportList from "@/pages/ImportList.vue";
 import NewImportDialog from "@/components/NewImportDialog.vue";
+import { useIsMobile } from "@/composables/useIsMobile";
+import { actionButtonProps } from "@/utils/actionButton";
 import { setProject } from "@/data/agentContext";
 
 const props = defineProps({
 	name: { type: String, required: true },
 });
+
+const isMobile = useIsMobile();
 
 const project = useDoc({ doctype: "Wikify Project", name: props.name });
 
@@ -15,11 +19,11 @@ const project = useDoc({ doctype: "Wikify Project", name: props.name });
 watch(
 	() => props.name,
 	(name) => name && setProject({ name, label: project.doc?.project_name || name }),
-	{ immediate: true }
+	{ immediate: true },
 );
 watch(
 	() => project.doc?.project_name,
-	(label) => label && setProject({ name: props.name, label })
+	(label) => label && setProject({ name: props.name, label }),
 );
 
 const showNewImport = ref(false);
@@ -33,10 +37,10 @@ const showNewImport = ref(false);
 				<nav class="flex min-w-0 items-center gap-1.5 text-base">
 					<RouterLink
 						:to="{ name: 'Projects' }"
-						class="text-ink-gray-5 hover:text-ink-gray-7"
+						class="hidden text-ink-gray-5 hover:text-ink-gray-7 sm:block"
 						>Projects</RouterLink
 					>
-					<span class="text-ink-gray-4" aria-hidden="true">/</span>
+					<span class="hidden text-ink-gray-4 sm:block" aria-hidden="true">/</span>
 					<span class="truncate text-ink-gray-9">{{
 						project.doc?.project_name || name
 					}}</span>
@@ -47,26 +51,26 @@ const showNewImport = ref(false);
 					theme="gray"
 					variant="subtle"
 					size="sm"
+					class="shrink-0"
 				/>
 			</div>
 
-			<div class="flex items-center gap-2">
+			<div class="flex shrink-0 items-center gap-2 pl-2">
 				<Button
 					variant="subtle"
-					label="Graph"
-					icon-left="lucide-waypoints"
+					v-bind="actionButtonProps(isMobile, 'lucide-waypoints', 'Graph')"
 					:route="{ name: 'ProjectGraph', params: { name } }"
 				/>
 				<Button
 					variant="ghost"
 					icon="lucide-settings"
+					aria-label="Project settings"
 					:route="{ name: 'ProjectSettings', params: { name } }"
 				/>
 				<Button
 					variant="solid"
 					theme="gray"
-					icon-left="lucide-plus"
-					label="New Document"
+					v-bind="actionButtonProps(isMobile, 'lucide-plus', 'New Document')"
 					@click="showNewImport = true"
 				/>
 			</div>
