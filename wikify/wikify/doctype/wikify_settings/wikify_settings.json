@@ -4,6 +4,10 @@
  "doctype": "DocType",
  "engine": "InnoDB",
  "field_order": [
+  "provider_section",
+  "llm_provider",
+  "column_break_provider",
+  "claude_cli_path",
   "models_section",
   "vlm_model",
   "cleanup_model",
@@ -25,6 +29,30 @@
   "classify_workers"
  ],
  "fields": [
+  {
+   "fieldname": "provider_section",
+   "fieldtype": "Section Break",
+   "label": "LLM Provider"
+  },
+  {
+   "default": "OpenRouter",
+   "description": "Who serves the completions. OpenRouter is the runtime provider for anything student-facing; Claude CLI routes calls through a developer's logged-in Claude subscription (bulk ingestion only — slower per call, and it reports no per-call price).",
+   "fieldname": "llm_provider",
+   "fieldtype": "Select",
+   "label": "LLM Provider",
+   "options": "OpenRouter\nClaude CLI"
+  },
+  {
+   "fieldname": "column_break_provider",
+   "fieldtype": "Column Break"
+  },
+  {
+   "depends_on": "eval:doc.llm_provider == \"Claude CLI\"",
+   "description": "Path to the `claude` executable. Blank uses `claude` from PATH.",
+   "fieldname": "claude_cli_path",
+   "fieldtype": "Data",
+   "label": "Claude CLI Path"
+  },
   {
    "fieldname": "models_section",
    "fieldtype": "Section Break",
@@ -147,7 +175,7 @@
  "index_web_pages_for_search": 1,
  "issingle": 1,
  "links": [],
- "modified": "2026-06-20 00:00:00",
+ "modified": "2026-08-12 00:00:00",
  "modified_by": "Administrator",
  "module": "Wikify",
  "name": "Wikify Settings",

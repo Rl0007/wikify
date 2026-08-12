@@ -19,6 +19,15 @@ The money arrives by two different roads because the two clients report it diffe
   (which litellm runs inline, on the calling thread) and bills it back by the same call id
   when the price lands. Only the money comes from the callback; the tokens are already on
   the response.
+
+An unpriced call adds nothing: `engine.llm`'s Claude CLI provider reports `cost: None`
+because a subscription call has no billable per-call price, and `flt(None)` is 0.0, so it
+folds in without crashing here, in `engine.store.cost_of` or in `history.log_turn`. The
+consequence is deliberate but worth knowing: an ask answered on that provider reports
+$0.00 spent, which is true of the metered bill and not of the tokens — the token totals
+still come through, and the per-call subscription figure the CLI does report is kept on the
+response under `usage["subscription_cost_usd"]`. Only the local developer lane can produce
+that; production sites stay on OpenRouter, where every leg is priced.
 """
 
 from __future__ import annotations
