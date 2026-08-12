@@ -74,6 +74,12 @@ const destinations = computed(() => [
 		isActive: route.name === "AskWiki",
 	},
 	{
+		label: "Exam Analysis",
+		icon: "lucide-flame",
+		to: { name: "ExamAnalysis" },
+		isActive: route.name === "ExamAnalysis",
+	},
+	{
 		label: "RAG Lab",
 		icon: "lucide-flask-conical",
 		to: { name: "RagLab" },

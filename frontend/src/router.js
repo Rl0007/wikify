@@ -44,6 +44,11 @@ const routes = [
 		component: () => import("@/pages/AskWiki.vue"),
 	},
 	{
+		path: "/exam-analysis",
+		name: "ExamAnalysis",
+		component: () => import("@/pages/ExamAnalysis.vue"),
+	},
+	{
 		path: "/rag-lab",
 		name: "RagLab",
 		component: () => import("@/pages/RagLab.vue"),
