@@ -1,0 +1,83 @@
+{
+ "actions": [],
+ "allow_rename": 0,
+ "autoname": "hash",
+ "creation": "2026-08-12 00:00:00",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "topic_title",
+  "topic_section",
+  "section",
+  "score",
+  "rank",
+  "method",
+  "confirmed"
+ ],
+ "fields": [
+  {
+   "columns": 4,
+   "fieldname": "topic_title",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Topic"
+  },
+  {
+   "columns": 2,
+   "description": "The rolled-up level-1/2 ancestor that forms one heatmap row.",
+   "fieldname": "topic_section",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "Topic Section",
+   "options": "Source Section"
+  },
+  {
+   "columns": 2,
+   "fieldname": "section",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "Matched Section",
+   "options": "Source Section"
+  },
+  {
+   "columns": 1,
+   "fieldname": "score",
+   "fieldtype": "Float",
+   "in_list_view": 1,
+   "label": "Score",
+   "precision": "4"
+  },
+  {
+   "columns": 1,
+   "fieldname": "rank",
+   "fieldtype": "Int",
+   "in_list_view": 1,
+   "label": "Rank"
+  },
+  {
+   "default": "retrieval",
+   "fieldname": "method",
+   "fieldtype": "Select",
+   "label": "Method",
+   "options": "retrieval\nstatutory\nreranker\nmanual"
+  },
+  {
+   "default": "0",
+   "fieldname": "confirmed",
+   "fieldtype": "Check",
+   "label": "Confirmed"
+  }
+ ],
+ "index_web_pages_for_search": 1,
+ "istable": 1,
+ "links": [],
+ "modified": "2026-08-12 00:00:00",
+ "modified_by": "Administrator",
+ "module": "Wikify",
+ "name": "Question Topic Link",
+ "owner": "Administrator",
+ "permissions": [],
+ "sort_field": "creation",
+ "sort_order": "DESC",
+ "states": []
+}

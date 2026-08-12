@@ -1,0 +1,184 @@
+{
+ "actions": [],
+ "allow_rename": 0,
+ "autoname": "EXAM-.YYYY.-.#####",
+ "creation": "2026-08-12 00:00:00",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "paper_title",
+  "project",
+  "paper_code",
+  "column_break_meta",
+  "exam_month",
+  "exam_year",
+  "assessment_year",
+  "section_break_source",
+  "source_pdf",
+  "source_url",
+  "section_break_stats",
+  "status",
+  "stage_label",
+  "stage_progress",
+  "question_count",
+  "total_marks",
+  "column_break_stats",
+  "attempted_marks",
+  "extracted_at",
+  "error"
+ ],
+ "fields": [
+  {
+   "fieldname": "paper_title",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Paper Title",
+   "reqd": 1
+  },
+  {
+   "fieldname": "project",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "Project",
+   "options": "Wikify Project",
+   "reqd": 1,
+   "search_index": 1
+  },
+  {
+   "description": "Paper 7 before May 2024, Paper 4 after the 2023 scheme change.",
+   "fieldname": "paper_code",
+   "fieldtype": "Data",
+   "label": "Paper Code"
+  },
+  {
+   "fieldname": "column_break_meta",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "exam_month",
+   "fieldtype": "Select",
+   "label": "Exam Month",
+   "options": "January\nMay\nJuly\nSeptember\nNovember\nDecember",
+   "reqd": 1
+  },
+  {
+   "fieldname": "exam_year",
+   "fieldtype": "Int",
+   "in_list_view": 1,
+   "label": "Exam Year",
+   "reqd": 1,
+   "search_index": 1
+  },
+  {
+   "description": "The AY this paper was set against. Two questions on one topic from different AYs can have different correct answers.",
+   "fieldname": "assessment_year",
+   "fieldtype": "Data",
+   "label": "Assessment Year"
+  },
+  {
+   "fieldname": "section_break_source",
+   "fieldtype": "Section Break",
+   "label": "Source"
+  },
+  {
+   "fieldname": "source_pdf",
+   "fieldtype": "Attach",
+   "label": "Source PDF"
+  },
+  {
+   "fieldname": "source_url",
+   "fieldtype": "Data",
+   "label": "Source URL"
+  },
+  {
+   "fieldname": "section_break_stats",
+   "fieldtype": "Section Break",
+   "label": "Extraction"
+  },
+  {
+   "default": "Draft",
+   "fieldname": "status",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "label": "Status",
+   "options": "Draft\nExtracting\nExtracted\nMapping\nMapped\nFailed",
+   "search_index": 1
+  },
+  {
+   "description": "What the background job is doing right now, in words a user can read.",
+   "fieldname": "stage_label",
+   "fieldtype": "Data",
+   "label": "Stage",
+   "read_only": 1
+  },
+  {
+   "fieldname": "stage_progress",
+   "fieldtype": "Percent",
+   "label": "Progress",
+   "read_only": 1
+  },
+  {
+   "fieldname": "question_count",
+   "fieldtype": "Int",
+   "label": "Questions",
+   "read_only": 1
+  },
+  {
+   "fieldname": "total_marks",
+   "fieldtype": "Float",
+   "label": "Total Marks",
+   "precision": "2",
+   "read_only": 1
+  },
+  {
+   "fieldname": "column_break_stats",
+   "fieldtype": "Column Break"
+  },
+  {
+   "description": "Marks a candidate can actually score once 'answer any four of five' is applied. Always <= total_marks.",
+   "fieldname": "attempted_marks",
+   "fieldtype": "Float",
+   "label": "Attemptable Marks",
+   "precision": "2",
+   "read_only": 1
+  },
+  {
+   "fieldname": "extracted_at",
+   "fieldtype": "Datetime",
+   "label": "Extracted At",
+   "read_only": 1
+  },
+  {
+   "fieldname": "error",
+   "fieldtype": "Long Text",
+   "label": "Error",
+   "read_only": 1
+  }
+ ],
+ "index_web_pages_for_search": 1,
+ "istable": 0,
+ "links": [],
+ "modified": "2026-08-12 00:00:00",
+ "modified_by": "Administrator",
+ "module": "Wikify",
+ "name": "Wikify Exam Paper",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  }
+ ],
+ "sort_field": "creation",
+ "sort_order": "DESC",
+ "states": [],
+ "title_field": "paper_title"
+}

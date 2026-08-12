@@ -1,0 +1,196 @@
+{
+ "actions": [],
+ "allow_rename": 0,
+ "autoname": "hash",
+ "creation": "2026-08-12 00:00:00",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "exam_paper",
+  "question_no",
+  "part_label",
+  "column_break_meta",
+  "question_kind",
+  "marks",
+  "is_compulsory",
+  "choice_group",
+  "choose_count",
+  "section_break_denorm",
+  "exam_year",
+  "assessment_year",
+  "column_break_denorm",
+  "project",
+  "page_no",
+  "section_break_body",
+  "question_text",
+  "statutory_refs",
+  "section_break_map",
+  "mapping_status",
+  "mapped_at",
+  "topics"
+ ],
+ "fields": [
+  {
+   "fieldname": "exam_paper",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "Exam Paper",
+   "options": "Wikify Exam Paper",
+   "reqd": 1,
+   "search_index": 1
+  },
+  {
+   "fieldname": "question_no",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Question No",
+   "reqd": 1
+  },
+  {
+   "fieldname": "part_label",
+   "fieldtype": "Data",
+   "label": "Part"
+  },
+  {
+   "fieldname": "column_break_meta",
+   "fieldtype": "Column Break"
+  },
+  {
+   "default": "Descriptive",
+   "fieldname": "question_kind",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "label": "Kind",
+   "options": "Descriptive\nMCQ\nCase Study\nNumerical"
+  },
+  {
+   "fieldname": "marks",
+   "fieldtype": "Float",
+   "in_list_view": 1,
+   "label": "Marks",
+   "precision": "2"
+  },
+  {
+   "default": "0",
+   "fieldname": "is_compulsory",
+   "fieldtype": "Check",
+   "label": "Compulsory"
+  },
+  {
+   "description": "Questions sharing a group are alternatives; only choose_count of them are attempted.",
+   "fieldname": "choice_group",
+   "fieldtype": "Data",
+   "label": "Choice Group"
+  },
+  {
+   "description": "How many of this choice group a candidate answers.",
+   "fieldname": "choose_count",
+   "fieldtype": "Int",
+   "label": "Choose Count"
+  },
+  {
+   "fieldname": "section_break_denorm",
+   "fieldtype": "Section Break"
+  },
+  {
+   "fetch_from": "exam_paper.exam_year",
+   "fieldname": "exam_year",
+   "fieldtype": "Int",
+   "label": "Exam Year",
+   "read_only": 1,
+   "search_index": 1
+  },
+  {
+   "fetch_from": "exam_paper.assessment_year",
+   "fieldname": "assessment_year",
+   "fieldtype": "Data",
+   "label": "Assessment Year",
+   "read_only": 1
+  },
+  {
+   "fieldname": "column_break_denorm",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fetch_from": "exam_paper.project",
+   "fieldname": "project",
+   "fieldtype": "Link",
+   "label": "Project",
+   "options": "Wikify Project",
+   "read_only": 1,
+   "search_index": 1
+  },
+  {
+   "fieldname": "page_no",
+   "fieldtype": "Int",
+   "label": "Page No"
+  },
+  {
+   "fieldname": "section_break_body",
+   "fieldtype": "Section Break",
+   "label": "Question"
+  },
+  {
+   "fieldname": "question_text",
+   "fieldtype": "Long Text",
+   "label": "Question Text"
+  },
+  {
+   "description": "Section references ICAI cites in its own model answer. A far stronger topic signal than retrieval similarity, because it is the examiner's own statement of what the question tests.",
+   "fieldname": "statutory_refs",
+   "fieldtype": "Small Text",
+   "label": "Statutory References"
+  },
+  {
+   "fieldname": "section_break_map",
+   "fieldtype": "Section Break",
+   "label": "Topic Mapping"
+  },
+  {
+   "default": "Unmapped",
+   "fieldname": "mapping_status",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "label": "Mapping Status",
+   "options": "Unmapped\nMapped\nNo Match",
+   "search_index": 1
+  },
+  {
+   "fieldname": "mapped_at",
+   "fieldtype": "Datetime",
+   "label": "Mapped At",
+   "read_only": 1
+  },
+  {
+   "fieldname": "topics",
+   "fieldtype": "Table",
+   "label": "Topics",
+   "options": "Question Topic Link"
+  }
+ ],
+ "index_web_pages_for_search": 1,
+ "istable": 0,
+ "links": [],
+ "modified": "2026-08-12 00:00:00",
+ "modified_by": "Administrator",
+ "module": "Wikify",
+ "name": "Wikify Exam Question",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  }
+ ],
+ "sort_field": "creation",
+ "sort_order": "DESC",
+ "states": []
+}
