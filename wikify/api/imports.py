@@ -7,18 +7,16 @@ import frappe
 from wikify.engine import preview_wiki as _preview_wiki
 from wikify.seed import seed_uncategorized_project
 
+#: Guard against a runaway drag-and-drop — one worker chews through these serially.
+MAX_BATCH = 25
 
-@frappe.whitelist()
-def start_import(pdf_file_url: str, title: str, project: str | None = None) -> str:
-	"""Create a Wikify Import for an uploaded PDF and enqueue the parse job.
 
-	`project` is the owning Wikify Project; it defaults to "Uncategorized" when omitted.
-	Returns the new Import's name so the SPA can route to its detail page.
-	"""
+def _create_import(pdf_file_url: str, title: str, project: str) -> str:
+	"""Create one Wikify Import and enqueue its parse job. Returns the Import's name."""
 	imp = frappe.new_doc("Wikify Import")
-	imp.import_title = title
+	imp.import_title = title or pdf_file_url.rsplit("/", 1)[-1].removesuffix(".pdf")
 	imp.pdf = pdf_file_url
-	imp.project = project or seed_uncategorized_project()
+	imp.project = project
 	imp.status = "Queued"
 	imp.insert()
 
@@ -29,6 +27,39 @@ def start_import(pdf_file_url: str, title: str, project: str | None = None) -> s
 		import_name=imp.name,
 	)
 	return imp.name
+
+
+@frappe.whitelist()
+def start_import(pdf_file_url: str, title: str, project: str | None = None) -> str:
+	"""Create a Wikify Import for an uploaded PDF and enqueue the parse job.
+
+	`project` is the owning Wikify Project; it defaults to "Uncategorized" when omitted.
+	Returns the new Import's name so the SPA can route to its detail page.
+	"""
+	return _create_import(pdf_file_url, title, project or seed_uncategorized_project())
+
+
+@frappe.whitelist()
+def start_imports(files: list[dict] | str, project: str | None = None) -> list[str]:
+	"""Batch sibling of `start_import` — one Import per uploaded PDF, one project.
+
+	`files` is a list of `{"file_url": ..., "title": ...}`. Imports are created and
+	enqueued in the given order; the long queue then works through them. Returns the new
+	Import names in the same order.
+	"""
+	if isinstance(files, str):
+		files = frappe.parse_json(files)
+	if not files:
+		frappe.throw("No files to import.")
+	if len(files) > MAX_BATCH:
+		frappe.throw(f"Import at most {MAX_BATCH} PDFs at a time (got {len(files)}).")
+
+	if any(not f.get("file_url") for f in files):
+		frappe.throw("Every file needs a file_url.")
+
+	# Resolve the default once — not once per file.
+	project = project or seed_uncategorized_project()
+	return [_create_import(f["file_url"], f.get("title"), project) for f in files]
 
 
 @frappe.whitelist()

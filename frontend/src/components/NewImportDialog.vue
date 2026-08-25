@@ -1,15 +1,9 @@
 <script setup>
 import { computed, ref, watch } from "vue";
 import { useRouter } from "vue-router";
-import {
-	Dialog,
-	FileUploader,
-	FormControl,
-	Button,
-	ErrorMessage,
-	useCall,
-	useList,
-} from "frappe-ui";
+import { Dialog, FormControl, Button, ErrorMessage, toast, useList } from "frappe-ui";
+import { usePdfUpload } from "@/composables/usePdfUpload";
+import UploadQueue from "@/components/UploadQueue.vue";
 
 const open = defineModel("open", { type: Boolean, default: false });
 // When launched from a project, that project is preset; globally it falls back to the
@@ -19,10 +13,30 @@ const props = defineProps({
 });
 
 const router = useRouter();
-const pdfUrl = ref(null);
-const pdfName = ref("");
-const title = ref("");
 const project = ref(props.project);
+const fileInput = ref(null);
+const dragging = ref(false);
+
+// One upload path shared with the document list's drop zone.
+const {
+	rows,
+	uploaded,
+	busy,
+	starting,
+	error: startError,
+	addFiles,
+	removeRow,
+	upload,
+	start,
+	reset: resetQueue,
+} = usePdfUpload();
+
+// A single PDF keeps the old flow — editable title, route to the detail page. A batch
+// takes filenames as titles and stays put.
+const single = computed(() => rows.value.length === 1);
+const canStart = computed(
+	() => !busy.value && uploaded.value.length > 0 && (!single.value || !!rows.value[0].title)
+);
 
 // Project picker options — pinned default first (server orders is_default desc).
 const projects = useList({
@@ -45,76 +59,87 @@ watch(
 	{ immediate: true }
 );
 
-const startImport = useCall({
-	url: "/api/v2/method/wikify.api.imports.start_import",
-	method: "POST",
-	immediate: false,
-	onSuccess(name) {
-		reset();
-		open.value = false;
-		router.push({ name: "ImportDetail", params: { name } });
-	},
-});
+/** Queue the picked/dropped files and start uploading right away. */
+function take(fileList) {
+	if (!addFiles(fileList)) return;
+	upload();
+}
 
-function onUpload(file) {
-	pdfUrl.value = file.file_url;
-	pdfName.value = file.file_name;
-	// Default the title to the filename without extension; stays editable.
-	if (!title.value) {
-		title.value = (file.file_name || "").replace(/\.pdf$/i, "");
+function onPick(e) {
+	take(e.target.files);
+	// Allow re-picking the same file after a remove.
+	e.target.value = "";
+}
+
+function onDrop(e) {
+	dragging.value = false;
+	take(e.dataTransfer?.files);
+}
+
+async function submit() {
+	const wasSingle = single.value;
+	const names = await start(project.value || undefined);
+	if (!names.length) return;
+	open.value = false;
+	reset();
+	if (wasSingle) {
+		router.push({ name: "ImportDetail", params: { name: names[0] } });
+	} else {
+		toast.success(`${names.length} documents queued`);
 	}
 }
 
-function start() {
-	if (!pdfUrl.value || !title.value) return;
-	startImport.submit({
-		pdf_file_url: pdfUrl.value,
-		title: title.value,
-		project: project.value || undefined,
-	});
-}
-
 function reset() {
-	pdfUrl.value = null;
-	pdfName.value = "";
-	title.value = "";
+	resetQueue();
 	project.value = props.project;
-	startImport.reset();
 }
 </script>
 
 <template>
-	<Dialog v-model:open="open" title="New Document" @close="reset">
+	<Dialog v-model:open="open" :title="single ? 'New Document' : 'New Documents'" @close="reset">
 		<template #default>
 			<div class="space-y-4">
 				<div>
-					<span class="mb-1.5 block text-xs text-ink-gray-5">PDF</span>
-					<FileUploader
-						:file-types="'application/pdf'"
-						:upload-args="{ private: true }"
-						@success="onUpload"
+					<span class="mb-1.5 block text-xs text-ink-gray-5">PDFs</span>
+					<input
+						ref="fileInput"
+						type="file"
+						accept="application/pdf"
+						multiple
+						class="hidden"
+						@change="onPick"
+					/>
+					<div
+						class="flex flex-col items-center justify-center gap-2 rounded-md border border-dashed px-4 py-6 text-center"
+						:class="
+							dragging
+								? 'border-outline-gray-3 bg-surface-gray-2'
+								: 'border-outline-gray-2'
+						"
+						@dragenter.prevent="dragging = true"
+						@dragover.prevent="dragging = true"
+						@dragleave="dragging = false"
+						@drop.prevent="onDrop"
 					>
-						<template #default="{ openFileSelector, uploading, progress }">
-							<div class="flex items-center gap-3">
-								<Button
-									:loading="uploading"
-									:label="
-										uploading
-											? `Uploading ${progress}%`
-											: pdfUrl
-											? 'Replace PDF'
-											: 'Choose PDF'
-									"
-									icon-left="lucide-upload"
-									@click="openFileSelector"
-								/>
-								<span v-if="pdfName" class="truncate text-sm text-ink-gray-7">{{
-									pdfName
-								}}</span>
-							</div>
-						</template>
-					</FileUploader>
+						<Button
+							label="Choose PDFs"
+							icon-left="lucide-upload"
+							:disabled="busy"
+							@click="fileInput?.click()"
+						/>
+						<p class="text-xs text-ink-gray-5">
+							or drop them here — one document each
+						</p>
+					</div>
 				</div>
+
+				<UploadQueue
+					v-if="rows.length"
+					:rows="rows"
+					:removable="!busy"
+					@remove="removeRow"
+					@retry="upload()"
+				/>
 
 				<FormControl
 					v-model="project"
@@ -124,14 +149,14 @@ function reset() {
 				/>
 
 				<FormControl
-					v-model="title"
+					v-if="single"
+					v-model="rows[0].title"
 					label="Title"
 					type="text"
 					placeholder="Document title"
-					:disabled="!pdfUrl"
 				/>
 
-				<ErrorMessage :message="startImport.error?.message" />
+				<ErrorMessage :message="startError" />
 			</div>
 		</template>
 
@@ -139,10 +164,10 @@ function reset() {
 			<Button
 				variant="solid"
 				theme="gray"
-				label="Start"
-				:loading="startImport.loading"
-				:disabled="!pdfUrl || !title"
-				@click="start"
+				:label="rows.length > 1 ? `Start (${uploaded.length})` : 'Start'"
+				:loading="starting"
+				:disabled="!canStart"
+				@click="submit"
 			/>
 		</template>
 	</Dialog>
