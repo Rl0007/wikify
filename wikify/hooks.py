@@ -18,16 +18,16 @@ website_route_rules = [
 
 app_icon_route = "/wikify"
 
-# Each item in the list will be shown as an app in the apps page
-# add_to_apps_screen = [
-# 	{
-# 		"name": "wikify",
-# 		"logo": "/assets/wikify/logo.png",
-# 		"title": "Wikify",
-# 		"route": "/wikify",
-# 		"has_permission": "wikify.api.permission.has_app_permission"
-# 	}
-# ]
+# Tile on the desk apps screen (/apps), next to Wiki and the Framework.
+add_to_apps_screen = [
+	{
+		"name": "wikify",
+		"logo": "/assets/wikify/images/logo.svg",
+		"title": "Wikify",
+		"route": "/wikify",
+		"has_permission": "wikify.api.permission.has_app_permission",
+	}
+]
 
 # Includes in <head>
 # ------------------
