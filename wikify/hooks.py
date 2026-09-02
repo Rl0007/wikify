@@ -157,6 +157,13 @@ after_install = "wikify.install.after_install"
 # Scheduled Tasks
 # ---------------
 
+scheduler_events = {
+	"cron": {
+		# Frequent enough that a lost worker surfaces while the user is still watching.
+		"*/15 * * * *": ["wikify.tasks.fail_stuck_imports"],
+	},
+}
+
 # scheduler_events = {
 # 	"all": [
 # 		"wikify.tasks.all"

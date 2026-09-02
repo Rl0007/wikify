@@ -19,6 +19,7 @@ def run(import_name: str) -> None:
 	imp = frappe.get_doc("Wikify Import", import_name)
 	try:
 		imp.db_set("status", "Parsing")
+		imp.db_set("error", None)
 		imp.db_set("started_at", now_datetime())
 		publish_progress(import_name, 0, "Starting parse", status="Parsing")
 		log(import_name, "info", "parse", f"Starting parse of {imp.import_title}")

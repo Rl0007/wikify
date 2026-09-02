@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import frappe
 
+from wikify import tasks
 from wikify.engine import preview_wiki as _preview_wiki
+from wikify.jobs._util import publish_progress
 from wikify.seed import seed_uncategorized_project
 
 #: Guard against a runaway drag-and-drop — one worker chews through these serially.
@@ -86,6 +88,43 @@ def trigger_remediation(import_name: str, scope: str = "flagged") -> str:
 		import_name=import_name,
 		scope=scope,
 	)
+	return import_name
+
+
+@frappe.whitelist()
+def retry_import(import_name: str) -> str:
+	"""Restart an Import that failed, or whose worker died mid-job.
+
+	Runs from `Failed`, or from a running status that has gone stale (no progress for
+	`tasks.STALE_MINUTES`) — a live job is never interrupted. The stale traceback is
+	cleared; an import with nothing parsed yet gets its parse job re-enqueued, and one
+	that already has a document is handed back to the stage before the one that died,
+	so remediation or wiki generation can be re-run.
+	"""
+	imp = frappe.get_doc("Wikify Import", import_name)
+	if imp.status not in ("Failed", *tasks.RUNNING_STATUSES):
+		frappe.throw(f"Nothing to retry — the import is in {imp.status}.")
+	if imp.status != "Failed" and not tasks.is_stale(imp):
+		frappe.throw(f"This import is still running ({imp.stage_label or imp.status}).")
+
+	# The transition is persisted before it is broadcast — a realtime hiccup must not
+	# leave the import stuck in the status it is being rescued from.
+	if not imp.source_document:
+		imp.db_set({"status": "Queued", "error": None})
+		publish_progress(import_name, 0, "Queued for retry", status="Queued")
+		frappe.enqueue(
+			"wikify.jobs.parse.run",
+			queue="long",
+			timeout=3600,
+			import_name=import_name,
+		)
+		return import_name
+
+	# The parse result (and any approved tree) is intact — hand the import back to the
+	# stage it was in before the lost job so the user can re-run it from the UI.
+	resume_status = "Graphed" if imp.status == "Generating Wiki" else "Review"
+	imp.db_set({"status": resume_status, "error": None})
+	publish_progress(import_name, 100, f"Ready to retry from {resume_status}", status=resume_status)
 	return import_name
 
 

@@ -23,6 +23,7 @@ def run(
 	imp = frappe.get_doc("Wikify Import", import_name)
 	try:
 		imp.db_set("status", "Generating Wiki")
+		imp.db_set("error", None)
 		publish_progress(import_name, 0, "Generating wiki", status="Generating Wiki")
 		log(import_name, "info", "generate", f"Generating wiki for {imp.import_title}")
 

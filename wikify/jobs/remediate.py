@@ -17,6 +17,7 @@ def run(import_name: str, scope: str = "flagged", instruction: str = "") -> None
 	imp = frappe.get_doc("Wikify Import", import_name)
 	try:
 		imp.db_set("status", "Remediating")
+		imp.db_set("error", None)
 		publish_progress(import_name, 0, f"Starting remediation ({scope})", status="Remediating")
 		log(import_name, "info", "remediate", f"Remediating {scope} pages of {imp.import_title}")
 
