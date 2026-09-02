@@ -5,7 +5,7 @@
 // a 2-mark MCQ, and counting them alike is how a heatmap starts lying.
 import { computed, onMounted, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
-import { Badge, Button, Dialog, FormControl, PageHeader } from "frappe-ui";
+import { Badge, Button, Dialog, FormControl, PageHeader, Progress } from "frappe-ui";
 import NewExamPaperDialog from "@/components/NewExamPaperDialog.vue";
 import { useHeatmap, usePaperActions, useTopicDrilldown } from "@/composables/useExam";
 import { useProjectOptions } from "@/composables/useRag";
@@ -114,10 +114,33 @@ function cellLabel(topic, year) {
 	return data && data.marks ? Math.round(data.marks) : "";
 }
 
-function statusTheme(status) {
-	if (status === "Mapped") return "green";
-	if (status === "Failed") return "red";
-	return "orange";
+// The stored `status` is pipeline vocabulary and it goes stale: mapping runs across the
+// whole project, so a paper mapped by a later run keeps saying "Extracted". Six of nine
+// papers read "Extracted" while every one of their questions was mapped. These read the
+// derived `state` the API computes from what is actually true.
+const STATE_LABELS = {
+	ready: "Ready",
+	working: "Working",
+	unmapped: "Needs mapping",
+	empty: "No questions",
+	failed: "Failed",
+};
+const STATE_THEMES = {
+	ready: "green",
+	working: "blue",
+	unmapped: "orange",
+	empty: "gray",
+	failed: "red",
+};
+
+function stateLabel(paper) {
+	return STATE_LABELS[paper.state] || paper.status || "—";
+}
+function stateTheme(paper) {
+	return STATE_THEMES[paper.state] || "gray";
+}
+function isWorking(paper) {
+	return paper.state === "working";
 }
 
 // A freshly uploaded or re-extracted paper is still working when the dialog closes, so
@@ -268,9 +291,33 @@ const papersByName = computed(() =>
 								{{ Math.round(paper.attempted_marks || 0) }}
 							</td>
 							<td class="p-2">
-								<Badge :theme="statusTheme(paper.status)" size="sm">
-									{{ paper.status }}
-								</Badge>
+								<div class="flex items-center gap-2">
+									<Badge :theme="stateTheme(paper)" size="sm">
+										{{ stateLabel(paper) }}
+									</Badge>
+									<template v-if="isWorking(paper)">
+										<Progress
+											:value="paper.stage_progress || 0"
+											size="sm"
+											class="w-20 shrink-0"
+										/>
+										<span class="truncate text-xs text-ink-gray-5">
+											{{ paper.stage_label || "starting…" }}
+										</span>
+									</template>
+									<span
+										v-else-if="paper.state === 'ready'"
+										class="text-xs text-ink-gray-5"
+									>
+										{{ paper.mapped_questions }} mapped
+									</span>
+								</div>
+								<p
+									v-if="paper.state === 'failed'"
+									class="mt-1 text-xs text-ink-red-3"
+								>
+									{{ (paper.error || "").split("\n").pop() }}
+								</p>
 							</td>
 							<td class="p-2">
 								<div class="flex justify-end gap-1">
