@@ -8,9 +8,9 @@ from unittest.mock import patch
 import frappe
 from frappe.tests.utils import FrappeTestCase
 
-from wikify.engine import parse_pdf, remediate_pdf
+from wikify.engine import parse_pdf, remediate_pdf, store
 from wikify.engine.loader.cleanup import clean_pages, strip_outer_markdown_fence
-from wikify.engine.loader.sectionizer import sectionize
+from wikify.engine.loader.sectionizer import Section, sectionize
 from wikify.tests.test_parse_pipeline import _make_sample_pdf
 from wikify.tests.test_remediate_pipeline import _MERMAID, _fake_chat
 
@@ -134,6 +134,24 @@ class TestSectionizer(FrappeTestCase):
 		cleaned = dict(clean_pages(pages))
 		self.assertIn("approved by committee", cleaned[1])
 		self.assertIn("|---|---|", cleaned[1])  # the real table separator survives
+
+
+class TestTitleFit(FrappeTestCase):
+	def test_overlong_section_title_is_stored_truncated(self):
+		long_title = "A. " + "Responsibilities of the transplant coordinator " * 8
+		self.assertGreater(len(long_title), store.TITLE_MAX)
+		sd = store.create_document("Title Fit Test")
+		section = Section(
+			title=long_title, level=1, hierarchy_path=[long_title], page_start=1, page_end=1, markdown="body"
+		)
+		store.replace_sections(sd, [section])
+
+		stored = frappe.get_all(
+			"Source Section", filters={"source_document": sd}, fields=["title", "markdown"]
+		)
+		self.assertEqual(len(stored), 1)
+		self.assertEqual(stored[0].title, long_title[: store.TITLE_MAX])
+		self.assertEqual(stored[0].markdown, "body")
 
 
 class TestSectionizeIntegration(FrappeTestCase):

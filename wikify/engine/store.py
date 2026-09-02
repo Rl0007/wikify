@@ -11,6 +11,10 @@ from __future__ import annotations
 import frappe
 from frappe.utils.file_manager import save_file
 
+# `Data` column limit — titles come out of PDFs and LLMs, so their length is unbounded
+# and `insert()` throws rather than truncating.
+TITLE_MAX = 140
+
 
 def create_document(
 	title: str,
@@ -21,7 +25,7 @@ def create_document(
 ) -> str:
 	"""Create a Source Document and return its name."""
 	doc = frappe.new_doc("Source Document")
-	doc.title = title
+	doc.title = title[:TITLE_MAX]
 	doc.set("import", import_name)  # 'import' is a Python keyword — set by string
 	doc.project = project  # denormalized from the Import for project-scoped Explore
 	doc.pdf = pdf_url
@@ -331,7 +335,7 @@ def replace_sections(source_document: str, sections) -> int:
 		doc.source_document = source_document
 		doc.parent_source_section = path_to_name.get(tuple(sec.hierarchy_path[:-1]))
 		doc.is_group = 1 if tuple(sec.hierarchy_path) in parent_paths else 0
-		doc.title = sec.title
+		doc.title = sec.title[:TITLE_MAX]
 		doc.section_type = sec.section_type
 		doc.level = sec.level
 		doc.hierarchy_path = " > ".join(sec.hierarchy_path)
