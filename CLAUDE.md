@@ -17,8 +17,8 @@ first-class DocTypes + a guided review UI.
 
 | | |
 |---|---|
-| Bench root | `/Users/mdhussain/Frappe/benches/december-bench` (run all `bench` commands here) |
-| Dev site | **`pdf.localhost`** |
+| Bench root | `/Users/deathstarconsole/company_projects/frappe/develop` (run all `bench` commands here) |
+| Dev site | **`wikify.localhost`** |
 | Login | **Administrator / admin** |
 | Installed apps | `frappe`, `wiki`, `wikify` (`wiki` is the wiki-generation target — Slice 7) |
 | SPA mount | `/wikify` (once Slice 1a lands) |
@@ -31,13 +31,13 @@ from the bench root.
 
 ```bash
 bench start                                   # web + socketio + workers + redis (needed for jobs + realtime)
-bench --site pdf.localhost migrate            # apply DocType / schema changes
-bench --site pdf.localhost console            # interactive python REPL with frappe loaded
-bench --site pdf.localhost execute wikify.engine.parse_pdf --kwargs "{'pdf_path': '...'}"   # headless pipeline run
-bench --site pdf.localhost run-tests --app wikify
+bench --site wikify.localhost migrate            # apply DocType / schema changes
+bench --site wikify.localhost console            # interactive python REPL with frappe loaded
+bench --site wikify.localhost execute wikify.engine.parse_pdf --kwargs "{'pdf_path': '...'}"   # headless pipeline run
+bench --site wikify.localhost run-tests --app wikify
 bench build --app wikify                       # build the SPA (or use vite dev via the frontend)
-bench --site pdf.localhost set-config developer_mode 1   # export DocType json on change
-bench --site pdf.localhost clear-cache
+bench --site wikify.localhost set-config developer_mode 1   # export DocType json on change
+bench --site wikify.localhost clear-cache
 ```
 
 Background jobs (parse/remediate/classify/generate) run on the **long** queue and emit
@@ -52,7 +52,7 @@ exercise them end-to-end.
 - **Frontend:** Frappe UI v1 + the `frappe-ui` skill. Data via `useCall`/`useList`/
   `useDoc` (v3 — **not** legacy `createResource`). Semantic tokens only (`bg-surface-*`,
   `text-ink-*`, `border-outline-*`); one solid primary action per page.
-- **Verify each slice** against `pdf.localhost` per the plan's Verification section
+- **Verify each slice** against `wikify.localhost` per the plan's Verification section
   before starting the next.
 - `pre-commit` (ruff/eslint/prettier/pyupgrade) runs on commit; keep it green.
 
