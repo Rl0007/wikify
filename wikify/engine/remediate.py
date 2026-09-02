@@ -47,6 +47,24 @@ def _pick_winner(candidates: list[tuple]) -> tuple | None:
 	return cleanup_c
 
 
+def _canonical_seed(page: dict, in_scope: bool) -> tuple[str, float | None, str]:
+	"""Where a page's canonical starts this run.
+
+	An in-scope page starts from its raw baseline, so a remediation is only canonical
+	when this run adopts it. A page outside the scope keeps the canonical it already
+	carries — a `flagged` run must not revert already-remediated `pass` pages to
+	baseline and throw away their adopted output.
+	"""
+	if in_scope:
+		return page["baseline_markdown"] or "", page["composite"], "baseline"
+	composite = page["canonical_composite"]
+	return (
+		page["canonical_markdown"] or page["baseline_markdown"] or "",
+		page["composite"] if composite is None else composite,
+		page["canonical_source"] or "baseline",
+	)
+
+
 def remediate_pdf(
 	source_document: str,
 	pdf_path: str,
@@ -78,10 +96,14 @@ def remediate_pdf(
 	targets = pages if scope == "all" else [p for p in pages if p["verdict"] != "pass"]
 	total = len(targets)
 
-	# Canonical defaults to each page's baseline; adopted remediations override below.
-	canon_md = {p["page_no"]: p["baseline_markdown"] or "" for p in pages}
-	canon_comp = {p["page_no"]: p["composite"] for p in pages}
-	canon_src = {p["page_no"]: "baseline" for p in pages}
+	target_page_nos = {p["page_no"] for p in targets}
+	canon_md: dict[int, str] = {}
+	canon_comp: dict[int, float | None] = {}
+	canon_src: dict[int, str] = {}
+	for p in pages:
+		canon_md[p["page_no"]], canon_comp[p["page_no"]], canon_src[p["page_no"]] = _canonical_seed(
+			p, p["page_no"] in target_page_nos
+		)
 
 	with fitz.open(pdf_path) as doc:
 		# Running furniture (banners, doc-code/date stamps, 'Page X of Y', prepared/issued/
@@ -92,6 +114,7 @@ def remediate_pdf(
 		furniture = det.find_furniture_lines([doc[p["page_no"] - 1].get_text("text") for p in pages])
 
 		doc_cost = 0.0
+		adopted_count = 0
 		for i, p in enumerate(targets):
 			page = doc[p["page_no"] - 1]
 			gt = page.get_text("text")
@@ -157,6 +180,7 @@ def remediate_pdf(
 				store.set_remediation(p["name"], "vlm", "", base_ps, False, "; ".join(errors) or None)
 
 			if adopted:
+				adopted_count += 1
 				canon_md[p["page_no"]] = record[1]
 				canon_comp[p["page_no"]] = new_composite
 				canon_src[p["page_no"]] = method
@@ -193,7 +217,6 @@ def remediate_pdf(
 	doc_cost += store.cost_of(llm.get_metrics())
 	store.add_document_cost(source_document, doc_cost)
 
-	adopted_count = sum(1 for src in canon_src.values() if src != "baseline")
 	return {
 		"targets": total,
 		"adopted": adopted_count,

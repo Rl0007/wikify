@@ -37,6 +37,11 @@ def _fake_chat(model, messages, label="", **kw):
 	return {"choices": [{"message": {"content": content}}], "usage": {}}
 
 
+def _cleanup_marks_the_page(md, model=None, project_context="", instruction=""):
+	"""A content-preserving cleanup whose output is distinguishable from the baseline."""
+	return md + "\n\nCLEANED"
+
+
 class TestRemediatePipeline(FrappeTestCase):
 	def setUp(self):
 		# These tests assume only VISUAL pages are judged ("text pages stay
@@ -182,6 +187,39 @@ class TestRemediatePipeline(FrappeTestCase):
 		store.add_document_cost(sd, added)
 		store.add_document_cost(sd, added)
 		self.assertAlmostEqual(frappe.db.get_value("Source Document", sd, "llm_cost"), 0.006)
+
+	def test_flagged_run_keeps_an_out_of_scope_page_canonical(self):
+		sd, path = self._parse()
+		with (
+			patch("wikify.engine.llm.has_openrouter", return_value=True),
+			patch("wikify.engine.llm.chat_completion", side_effect=_fake_chat),
+			patch("wikify.engine.remediate.clean_markdown", side_effect=_cleanup_marks_the_page),
+			patch("wikify.engine.remediate.vlm.parse_page_image", return_value=_MERMAID),
+		):
+			remediate_pdf(sd, path, scope="all")
+
+		fields = ["canonical_markdown", "canonical_source", "canonical_composite", "verdict"]
+		before = frappe.db.get_value(
+			"Source Page", {"source_document": sd, "page_no": 1}, fields, as_dict=True
+		)
+		self.assertEqual(before.verdict, "pass")
+		self.assertEqual(before.canonical_source, "cleanup")
+		self.assertIn("CLEANED", before.canonical_markdown)
+
+		with (
+			patch("wikify.engine.llm.has_openrouter", return_value=True),
+			patch("wikify.engine.llm.chat_completion", side_effect=_fake_chat),
+			patch("wikify.engine.remediate.clean_markdown", side_effect=_cleanup_marks_the_page),
+			patch("wikify.engine.remediate.vlm.parse_page_image", return_value=_MERMAID),
+		):
+			remediate_pdf(sd, path, scope="flagged")
+
+		after = frappe.db.get_value(
+			"Source Page", {"source_document": sd, "page_no": 1}, fields, as_dict=True
+		)
+		self.assertEqual(after.canonical_markdown, before.canonical_markdown)
+		self.assertEqual(after.canonical_source, before.canonical_source)
+		self.assertEqual(after.canonical_composite, before.canonical_composite)
 
 	def test_remediate_flagged_scope_skips_passing_pages(self):
 		sd, path = self._parse()

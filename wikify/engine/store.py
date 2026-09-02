@@ -126,11 +126,25 @@ def add_document_cost(source_document: str, cost: float) -> None:
 
 
 def get_pages(source_document: str) -> list[dict]:
-	"""Pages of a doc (ordered) with the fields remediation needs to route + re-score."""
+	"""Pages of a doc (ordered) with the fields remediation needs to route + re-score.
+
+	The canonical fields ride along so a scoped run can leave the pages it doesn't
+	touch on the canonical they already carry.
+	"""
 	return frappe.get_all(
 		"Source Page",
 		filters={"source_document": source_document},
-		fields=["name", "page_no", "kind", "baseline_markdown", "verdict", "composite"],
+		fields=[
+			"name",
+			"page_no",
+			"kind",
+			"baseline_markdown",
+			"verdict",
+			"composite",
+			"canonical_markdown",
+			"canonical_composite",
+			"canonical_source",
+		],
 		order_by="page_no asc",
 	)
 
