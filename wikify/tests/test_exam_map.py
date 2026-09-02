@@ -113,9 +113,28 @@ class TestStatutoryMatching(FrappeTestCase):
 		hits = dict(exam_map.statutory_hits(["54F"], corpus))
 
 		self.assertGreater(hits["sec-about-it"], hits["sec-passing"])
-		# min(3, occurrences) / 3 — a section citing it 20 times cannot dwarf everything else.
-		self.assertEqual(hits["sec-about-it"], 1.0)
-		self.assertAlmostEqual(hits["sec-passing"], 1 / 3)
+		# The occurrence ceiling is min(3, n)/3, so a section citing a provision three times
+		# scores the same as one citing it twenty. Asserted as a RATIO rather than an absolute
+		# score: the absolute value also carries the inverse-document-frequency weight for the
+		# provision, and pinning that number made this test fail the moment IDF was introduced
+		# even though the behaviour it is named for was still correct.
+		self.assertAlmostEqual(hits["sec-about-it"] / hits["sec-passing"], 3.0)
+
+	def test_a_provision_the_corpus_mentions_everywhere_is_weighted_down(self):
+		"""Inverse document frequency: ubiquity is not evidence.
+
+		A provision in every section says nothing about which chapter a question belongs to,
+		while one in a single section is close to a pointer. Before this, 115BAC (25 sections)
+		outscored 91 (3 sections) purely by being common.
+		"""
+		common = [(f"sec-{index}", "section 99 applies here.") for index in range(10)]
+		rare = [("sec-rare", "section 77 applies here.")] + [
+			(f"sec-other-{index}", "nothing relevant") for index in range(9)
+		]
+
+		common_score = dict(exam_map.statutory_hits(["99"], common))["sec-0"]
+		rare_score = dict(exam_map.statutory_hits(["77"], rare))["sec-rare"]
+		self.assertGreater(rare_score, common_score)
 
 	def test_refs_are_normalised_and_deduplicated(self):
 		refs = exam_map.statutory_refs({"statutory_refs": "section 115bac, u/s 115BAC, sec. 45(1A)"})

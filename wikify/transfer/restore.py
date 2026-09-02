@@ -10,7 +10,12 @@ that look collision-proof. A hash name is only unique on the site that minted it
 alternative — keep-if-free, remap-if-taken — means the same bundle imports differently
 depending on what the target already holds. Reallocating always makes one code path
 instead of two, and nothing outside the bundle refers to these names: the LanceDB index is
-rebuilt from the rows, and the wiki is regenerated.
+rebuilt from the rows, and the wiki is regenerated. `Wikify Project.project_name` is unique
+too, so it is freed the same way — with a counter suffix, reported back to the caller.
+
+**Reading order comes from `sort_order`, never from the names.** The nested-set bounds are
+recomputed here rather than carried in the bundle, and the sibling order they encode is the
+parse order — see `rebuild_sections_in_sort_order`.
 
 **Nothing is committed until everything succeeds.** The whole insert runs inside a
 savepoint. A partially imported corpus is worse than a failed one, because it looks
@@ -25,7 +30,6 @@ import zipfile
 
 import frappe
 from frappe.utils.file_manager import save_file
-from frappe.utils.nestedset import rebuild_tree
 
 from wikify.rag import index
 from wikify.transfer import bundle
@@ -100,8 +104,91 @@ def merge_section_types(rows: list[dict], remap: dict[str, dict[str, str]]) -> i
 	return created
 
 
-def insert_rows(rows: dict[str, list[dict]], remap: dict[str, dict[str, str]]) -> dict[str, int]:
-	"""Insert every row set in bundle order, recording old name → new name as it goes."""
+def free_project_name(project_name: str) -> str:
+	"""A `project_name` no project on this site holds yet, suffixed with a counter if needed.
+
+	`Wikify Project.project_name` carries a UNIQUE index and travels through the bundle
+	untouched, so a bundle could not land on any site already holding a project of that name —
+	including a re-import onto the site it came from, which is the documented "import it
+	twice" path. It died as a raw `UniqueValidationError` from the DB. Renaming keeps the one
+	code path the name-reallocation invariant is built on, and the report says what happened
+	so the rename is never a silent surprise.
+	"""
+	if not frappe.db.exists("Wikify Project", {"project_name": project_name}):
+		return project_name
+	counter = 2
+	# ponytail: linear probe from 2, so importing the same bundle N times costs N exists()
+	# calls on the Nth import; query the taken suffixes in one go if that ever matters.
+	while frappe.db.exists("Wikify Project", {"project_name": f"{project_name} ({counter})"}):
+		counter += 1
+	return f"{project_name} ({counter})"
+
+
+def rebuild_sections_in_sort_order() -> None:
+	"""Recompute every `Source Section`'s `lft`/`rgt`, ordering siblings by `sort_order`.
+
+	`frappe.utils.nestedset.rebuild_tree` orders siblings BY NAME, and every name was just
+	reallocated to a fresh hash — so it would hand an imported document a sibling order
+	unrelated to the source's, while `order_by="lft asc"` is how `api/sections`, `api/graph`,
+	`api/wiki` and `rag.chunk` all read the tree. `sort_order` is the parse order and it
+	survives the bundle intact, so it is the only surviving record of how the corpus reads.
+
+	Like `rebuild_tree`, this runs over the whole doctype, so it also repairs pre-existing
+	drift on the target. `api.sections._rebuild_tree` already orders siblings this way, but it
+	walks ONE document with a query per node — fine after a single edit, chatty for a
+	corpus-sized import — and it re-derives denorm fields the bundle already carries intact.
+	"""
+	rows = frappe.get_all(
+		"Source Section",
+		fields=["name", "parent_source_section", "sort_order"],
+		order_by="sort_order asc, name asc",
+	)
+	children: dict[str | None, list[str]] = {}
+	for row in rows:
+		children.setdefault(row["parent_source_section"] or None, []).append(row["name"])
+
+	opened: dict[str, int] = {}
+	bounds: dict[str, tuple[int, int]] = {}
+	counter = 0
+	# Iterative rather than recursive: the depth here is data (a hierarchy read out of a PDF),
+	# not code, so it must not be able to exhaust the interpreter's stack.
+	for root in children.get(None, []):
+		stack: list[tuple[str, bool]] = [(root, False)]
+		while stack:
+			name, closing = stack.pop()
+			counter += 1
+			if closing:
+				bounds[name] = (opened[name], counter)
+				continue
+			opened[name] = counter
+			stack.append((name, True))
+			for child in reversed(children.get(name, [])):
+				stack.append((child, False))
+
+	if len(bounds) != len(rows):
+		# A section whose parent link resolves to nothing is unreachable from any root, so it
+		# would silently keep stale bounds that overlap the ones just written.
+		raise ValueError(
+			f"{len(rows) - len(bounds)} of {len(rows)} sections are unreachable from a root; "
+			"their parent links point at rows that do not exist."
+		)
+
+	# ponytail: one UPDATE per section, same as `rebuild_tree`; batch the writes if a site ever
+	# holds enough sections for this to show up in an import's runtime.
+	for name, (left, right) in bounds.items():
+		frappe.db.set_value("Source Section", name, {"lft": left, "rgt": right}, update_modified=False)
+
+
+def insert_rows(
+	rows: dict[str, list[dict]],
+	remap: dict[str, dict[str, str]],
+	renamed_projects: dict[str, str] | None = None,
+) -> dict[str, int]:
+	"""Insert every row set in bundle order, recording old name → new name as it goes.
+
+	`renamed_projects` collects bundle `project_name` → the name actually used, for any project
+	whose name was already taken on this site.
+	"""
 	created: dict[str, int] = {}
 	for _member, doctype in bundle.ROW_SETS:
 		if doctype in bundle.MERGE_BY_NAME:
@@ -119,6 +206,10 @@ def insert_rows(rows: dict[str, list[dict]], remap: dict[str, dict[str, str]]) -
 				# The source site's default project has no authority here, and two rows
 				# flagged default is a state the app does not expect.
 				payload["is_default"] = 0
+				bundled_project_name = payload.get("project_name")
+				payload["project_name"] = free_project_name(bundled_project_name)
+				if renamed_projects is not None and payload["project_name"] != bundled_project_name:
+					renamed_projects[bundled_project_name] = payload["project_name"]
 			document = frappe.get_doc({"doctype": doctype, **payload})
 			document.insert()
 			remap[doctype][row["name"]] = document.name
@@ -197,30 +288,37 @@ def import_bundle(path: str, *, rebuild_index: bool = True) -> dict:
 	"""
 	manifest, rows, file_index = read_bundle(path)
 	remap: dict[str, dict[str, str]] = {doctype: {} for _member, doctype in bundle.ROW_SETS}
+	renamed_projects: dict[str, str] = {}
 
 	frappe.db.savepoint(SAVEPOINT)
 	try:
-		created = insert_rows(rows, remap)
+		created = insert_rows(rows, remap, renamed_projects)
 		deferred = fill_deferred_links(rows, remap)
 		attachments = restore_attachments(path, rows, remap, file_index)
-		# Trust the parent links, not the bundle's bounds. Frappe recomputes lft/rgt for the
-		# whole doctype, which also repairs any pre-existing drift on the target.
+		# Trust the parent links, not the bundle's bounds, and order siblings by `sort_order`
+		# rather than by the freshly reallocated names — see `rebuild_sections_in_sort_order`.
 		# ponytail: rebuilds every Source Section on the site, not just the imported ones;
 		# scope it if a site ever holds enough projects for this to be slow.
-		rebuild_tree("Source Section")
+		rebuild_sections_in_sort_order()
 	except Exception:
 		frappe.db.rollback(save_point=SAVEPOINT)
 		raise
 	frappe.db.commit()
 
 	project = remap["Wikify Project"].get(manifest["project"]["name"])
+	bundled_project_name = manifest["project"].get("project_name")
 	report = {
 		"project": project,
+		"project_name": frappe.db.get_value("Wikify Project", project, "project_name") if project else None,
 		"source_project": manifest["project"]["name"],
+		"source_project_name": bundled_project_name,
 		"source_site": manifest.get("source_site"),
 		"created": created,
 		"deferred_links": deferred,
 		"attachments": attachments,
+		# Surfaced rather than swallowed: the imported project answers to a different name than
+		# the bundle carried, and a reader looking for the bundled one has to be told.
+		"renamed_projects": renamed_projects,
 	}
 	if rebuild_index and project:
 		report["index"] = index.rebuild_project(project)

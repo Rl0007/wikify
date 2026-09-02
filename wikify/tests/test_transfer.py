@@ -15,7 +15,10 @@ The load-bearing assertions:
   - `assert_supported` refuses a bundle whose schema version is not exactly this build's,
     rather than importing half of it and guessing at the rest.
   - every name is reallocated. Not one row keeps the name it had in the bundle, and the links
-    between them still point at the right rows afterwards.
+    between them still point at the right rows afterwards. `project_name` is unique too, so a
+    taken one is freed with a counter suffix and reported back rather than crashing the import.
+  - reading order survives. `lft` is what every reader orders by, and the rebuilt bounds follow
+    `sort_order` — not the freshly reallocated hash names.
   - a failure anywhere in the import rolls back to ZERO rows. A half-imported corpus is worse
     than a failed one, because it looks complete.
 """
@@ -213,20 +216,12 @@ class TestExportRestore(FrappeTestCase):
 		return export.export_project(self.project.name, output_dir=self.output_dir)
 
 	def import_onto_a_site_without_it(self, path: str) -> dict:
-		"""Import `path` after freeing the project name it carries.
+		"""Import `path` onto this site.
 
-		`Wikify Project.project_name` is unique and `restore` reallocates `name` only, so a
-		bundle cannot land on a site that already holds a project of that name — including
-		the site it came from. Renaming the source here stands in for a genuinely different
-		target site. See `test_a_bundle_whose_project_name_is_taken_cannot_land` — this is a
-		defect, not a property worth relying on.
+		A same-site import is the harshest version of the reallocation invariant — every name
+		in the bundle, `project_name` included, is already taken. Nothing has to be freed
+		first: see `test_a_bundle_whose_project_name_is_taken_lands_under_a_free_name`.
 		"""
-		frappe.db.set_value(
-			"Wikify Project",
-			self.project.name,
-			"project_name",
-			f"{self.project.project_name} (exported from)",
-		)
 		return restore.import_bundle(path, rebuild_index=False)
 
 	def test_an_export_writes_every_row_set_and_reports_what_went_in(self):
@@ -321,27 +316,86 @@ class TestExportRestore(FrappeTestCase):
 		self.assertEqual(reference[0]["to_section"], by_title["Section 45"]["name"])
 
 	def test_sort_order_survives_the_transfer(self):
-		"""`sort_order` is carried in the row, and it is the only surviving record of order.
+		"""`sort_order` is carried in the row, and the rebuilt tree has to agree with it.
 
-		DEFECT, worth knowing about: the nested-set bounds are recomputed by `rebuild_tree`,
-		which orders siblings by `name` — and every name was just reallocated to a fresh hash.
-		So `order_by="lft asc"`, which is how `api/sections`, `api/graph`, `api/wiki` and
-		`rag.chunk` all read the tree, returns an imported document's siblings in an order
-		unrelated to the source's. Nothing is lost (`sort_order` still holds the truth), but
-		the reading order of a transferred corpus is not the one it was parsed in.
+		`order_by="lft asc"` is how `api/sections`, `api/graph`, `api/wiki` and `rag.chunk` all
+		read the tree, so `lft` IS the reading order. Frappe's `rebuild_tree` orders siblings by
+		`name` — and every name was just reallocated to a fresh hash, which gives the imported
+		document an order unrelated to the source's. This asserts it end to end, on two siblings,
+		so a name-ordered rebuild would satisfy it half the time by luck;
+		`test_the_rebuild_orders_siblings_by_sort_order_and_never_by_name` is the deterministic
+		one and it is what actually pins the behaviour.
 		"""
 		report = self.export()
 
 		outcome = self.import_onto_a_site_without_it(report["path"])
 
 		documents = frappe.get_all("Source Document", filters={"project": outcome["project"]}, pluck="name")
+		expected = ["CAPITAL GAINS", "Section 54F", "Section 45"]
 		by_sort_order = frappe.get_all(
 			"Source Section",
 			filters={"source_document": documents[0]},
 			pluck="title",
 			order_by="sort_order asc",
 		)
-		self.assertEqual(by_sort_order, ["CAPITAL GAINS", "Section 54F", "Section 45"])
+		self.assertEqual(by_sort_order, expected)
+
+		by_tree_position = frappe.get_all(
+			"Source Section",
+			filters={"source_document": documents[0]},
+			pluck="title",
+			order_by="lft asc",
+		)
+		self.assertEqual(by_tree_position, expected)
+
+	def test_the_rebuild_orders_siblings_by_sort_order_and_never_by_name(self):
+		"""Deterministic where the end-to-end test can only be probabilistic.
+
+		Hash names sort arbitrarily, so a two-sibling document survives a name-ordered rebuild
+		half the time. Six siblings whose parse order is neither alphabetical nor numeric pin it:
+		the titles here sort as 10, 112, 2, 45, 54F, 9 by name.
+		"""
+		titles = ["Section 54F", "Section 45", "Section 9", "Section 112", "Section 10", "Section 2"]
+		engine_store.replace_sections(
+			self.document.name,
+			[
+				make_section("CAPITAL GAINS", ["CAPITAL GAINS"], 1, "Chapter on capital gains."),
+				*(make_section(title, ["CAPITAL GAINS", title], 2) for title in titles),
+			],
+		)
+
+		restore.rebuild_sections_in_sort_order()
+
+		self.assertEqual(
+			frappe.get_all(
+				"Source Section",
+				filters={"source_document": self.document.name},
+				pluck="title",
+				order_by="lft asc",
+			),
+			["CAPITAL GAINS", *titles],
+		)
+
+	def test_the_rebuilt_tree_is_a_valid_nested_set(self):
+		"""Bounds that overlap or repeat make every `lft`-ordered read arbitrary.
+
+		Asserted on the whole doctype, not just the import: the rebuild renumbers every
+		`Source Section` on the site, so a bug in it would corrupt the fixtures' bounds too.
+		"""
+		report = self.export()
+
+		self.import_onto_a_site_without_it(report["path"])
+
+		rows = frappe.get_all("Source Section", fields=["name", "lft", "rgt", "parent_source_section"])
+		bounds = sorted(value for row in rows for value in (row["lft"], row["rgt"]))
+		self.assertEqual(bounds, list(range(1, 2 * len(rows) + 1)), "lft/rgt are not a permutation")
+		by_name = {row["name"]: row for row in rows}
+		for row in rows:
+			self.assertLess(row["lft"], row["rgt"])
+			parent = by_name.get(row["parent_source_section"]) if row["parent_source_section"] else None
+			if parent:
+				self.assertLess(parent["lft"], row["lft"])
+				self.assertGreater(parent["rgt"], row["rgt"])
 
 	def rewrite_member(self, source_path: str, member: str, payload_object) -> str:
 		"""A re-signed copy of a bundle with one row set replaced — a bundle from a site
@@ -419,7 +473,8 @@ class TestExportRestore(FrappeTestCase):
 		report = self.export()
 		before = self.counts()
 
-		with patch.object(restore, "rebuild_tree", side_effect=RuntimeError("tree rebuild exploded")):
+		exploded = RuntimeError("tree rebuild exploded")
+		with patch.object(restore, "rebuild_sections_in_sort_order", side_effect=exploded):
 			with self.assertRaises(RuntimeError):
 				self.import_onto_a_site_without_it(report["path"])
 
@@ -427,40 +482,55 @@ class TestExportRestore(FrappeTestCase):
 		self.assertFalse(
 			frappe.get_all(
 				"Wikify Project",
-				filters={"project_name": self.project.project_name, "name": ["!=", self.project.name]},
+				filters={
+					"project_name": ["like", f"{self.project.project_name}%"],
+					"name": ["!=", self.project.name],
+				},
 			),
 			"a second copy of the project survived the rollback",
 		)
 
-	def test_a_bundle_whose_project_name_is_taken_cannot_land(self):
-		"""DEFECT, pinned deliberately so the fix has a test to invert.
+	def test_a_bundle_whose_project_name_is_taken_lands_under_a_free_name(self):
+		"""`project_name` is unique, so it is freed the same way every `name` is.
 
-		`restore` reallocates every `name`, but `Wikify Project.project_name` carries a UNIQUE
-		index and travels through the bundle untouched. So a bundle cannot be imported onto any
-		site that already holds a project of that name — including a re-import onto the site it
-		came from, which is the documented "import it twice" path. It fails as a raw
-		`UniqueValidationError` from the DB rather than as an explanation of what went wrong.
-		The savepoint does its job (nothing is left behind), so this is a usability defect
-		rather than a corruption one.
+		A re-import onto the site the bundle came from is the documented "import it twice" path,
+		and it used to die as a raw `UniqueValidationError` from the DB. The suffix is reported
+		rather than applied silently: a reader looking for the bundled name has to be told which
+		project actually holds it now.
 		"""
 		report = self.export()
-		before = self.counts()
+		bundled_name = self.project.project_name
 
-		with self.assertRaises(frappe.UniqueValidationError):
-			restore.import_bundle(report["path"], rebuild_index=False)
+		outcome = restore.import_bundle(report["path"], rebuild_index=False)
 
-		self.assertEqual(self.counts(), before)
+		self.assertEqual(outcome["source_project_name"], bundled_name)
+		self.assertEqual(outcome["project_name"], f"{bundled_name} (2)")
+		self.assertEqual(outcome["renamed_projects"], {bundled_name: f"{bundled_name} (2)"})
+		# The site's own project keeps the name it had; only the arriving copy moves.
+		self.assertEqual(
+			frappe.db.get_value("Wikify Project", self.project.name, "project_name"), bundled_name
+		)
+
+	def test_a_project_name_that_is_free_arrives_unchanged(self):
+		"""The suffix is a collision escape hatch, not a mark stamped on every import."""
+		report = self.export()
+		frappe.db.set_value("Wikify Project", self.project.name, "project_name", "Moved Away")
+
+		outcome = restore.import_bundle(report["path"], rebuild_index=False)
+
+		self.assertEqual(outcome["project_name"], self.project.project_name)
+		self.assertEqual(outcome["renamed_projects"], {})
 
 	def test_importing_the_same_bundle_twice_makes_two_independent_projects(self):
 		"""Reallocating always means one code path, whatever the target already holds."""
 		report = self.export()
 
 		first = self.import_onto_a_site_without_it(report["path"])
-		# The bundle's project name is now taken by the first import, so free it again.
-		frappe.db.set_value(
-			"Wikify Project", first["project"], "project_name", f"{self.project.project_name} (first)"
-		)
 		second = restore.import_bundle(report["path"], rebuild_index=False)
+
+		# Three projects now hold a variant of the one name, and each suffix is a fresh one.
+		self.assertEqual(first["project_name"], f"{self.project.project_name} (2)")
+		self.assertEqual(second["project_name"], f"{self.project.project_name} (3)")
 
 		self.assertNotEqual(first["project"], second["project"])
 		for project in (first["project"], second["project"]):

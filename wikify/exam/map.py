@@ -26,6 +26,7 @@ a subtree, and falls back to the section itself when no ancestor qualifies — s
 
 from __future__ import annotations
 
+import math
 import re
 
 import frappe
@@ -44,7 +45,19 @@ MIN_TOPIC_SUBTREE = 3
 RETRIEVAL_DEPTH = 6
 
 # Matches "section 115BAC", "Section 45(1A)", "u/s 54F" — the forms ICAI prints.
-STATUTORY = re.compile(r"(?:section|sec\.?|u/s)\s*([0-9]+[A-Z]{0,4}(?:\([0-9A-Za-z]+\))*)", re.IGNORECASE)
+# The trailing lookahead rejects provisions of OTHER statutes: "section 15 of the MSMED Act"
+# is not an Income-tax section, and harvesting it produced confident matches against
+# whatever Income-tax section happened to share the number.
+STATUTORY = re.compile(
+	r"(?:section|sec\.?|u/s)\s*([0-9]+[A-Z]{0,4}(?:\([0-9A-Za-z]+\))*)"
+	r"(?!\s+of\s+the\s+(?!Income)\w+)",
+	re.IGNORECASE,
+)
+
+# A provision written without any citation word, as a bare comma-separated list. Extraction
+# emits this format for some papers, and the anchored regex above reads none of it — 14
+# questions in one paper silently lost their statutory leg AND their gap verdict.
+BARE_PROVISION = re.compile(r"^[0-9]+[A-Z]{0,4}(?:\([0-9A-Za-z]+\))*$")
 
 
 def section_index(project: str) -> dict[str, dict]:
@@ -99,9 +112,17 @@ def topic_of(section: str, index: dict[str, dict]) -> dict | None:
 
 
 def statutory_refs(question: dict) -> list[str]:
-	"""Normalised section numbers cited in ICAI's model answer for this question."""
+	"""Normalised section numbers cited in ICAI's model answer for this question.
+
+	Reads both formats extraction emits: anchored ("section 45(1A)") and bare
+	("45(1A), 115BAC"). The bare fallback only runs when the anchored pass finds nothing, so
+	a well-formed field is never re-parsed loosely.
+	"""
 	raw = question.get("statutory_refs") or ""
-	return sorted({match.group(1).upper() for match in STATUTORY.finditer(raw)})
+	found = {match.group(1).upper() for match in STATUTORY.finditer(raw)}
+	if not found:
+		found = {token.strip().upper() for token in raw.split(",") if BARE_PROVISION.match(token.strip())}
+	return sorted(found)
 
 
 def retrieval_hits(question: dict, project: str) -> tuple[list[tuple[str, float]], float]:
@@ -156,10 +177,32 @@ def provision_pattern(ref: str) -> re.Pattern:
 	A following `(` is still allowed, because `section 11(2)` genuinely is section 11; only
 	an alphanumeric continuation is rejected.
 	"""
+	escaped = re.escape(ref)
+	boundary = r"(?![0-9A-Za-z])"
+	# Three ways this corpus writes a provision, measured over its own markdown:
+	# "section N" (474), "u/s N" (356), and a bare number in a markdown table cell (123).
+	# Without the table form the entire TDS/TCS chapter is invisible to the statutory leg,
+	# which is why a salary-TDS question scored highest against the wrong chapter.
 	return re.compile(
-		r"(?:section|sec\.?|u/s)\s*\[?\s*" + re.escape(ref) + r"(?![0-9A-Za-z])",
+		r"(?:(?:section|sec\.?|u/s)\s*\[?\s*"
+		+ escaped
+		+ boundary
+		+ r"|\|\s*"
+		+ escaped
+		+ boundary
+		+ r"\s*\|)",
 		re.IGNORECASE,
 	)
+
+
+def parent_provision(ref: str) -> str | None:
+	"""`16(ia)` -> `16`. The parent section a sub-section belongs to.
+
+	Only safe now that `provision_pattern` is anchored on the right: before that, falling
+	back to `16` would have matched `160`, `161` and every other section sharing the prefix.
+	"""
+	base = ref.split("(", 1)[0].strip()
+	return base if base and base != ref else None
 
 
 def statutory_hits(refs: list[str], markdown: list[tuple[str, str]]) -> list[tuple[str, float]]:
@@ -173,16 +216,37 @@ def statutory_hits(refs: list[str], markdown: list[tuple[str, str]]) -> list[tup
 	"""
 	found: dict[str, float] = {}
 	for ref in refs:
-		pattern = provision_pattern(ref)
-		for section, text in markdown:
-			if not text:
-				continue
-			occurrences = len(pattern.findall(text))
-			if occurrences:
-				# A section citing a provision repeatedly is more about it than one that
-				# mentions it once in passing, but with diminishing returns.
-				found[section] = found.get(section, 0.0) + min(3.0, occurrences) / 3.0
+		matches = sections_citing(ref, markdown)
+		if not matches:
+			# Fall back to the parent section, so a question citing 16(ia) still finds the
+			# chapter that teaches section 16 when the sub-section itself is not spelled out.
+			parent = parent_provision(ref)
+			matches = sections_citing(parent, markdown) if parent else {}
+		if not matches:
+			continue
+		# Inverse document frequency: a provision the corpus mentions everywhere says little
+		# about which chapter a question belongs to, while one appearing in three sections is
+		# close to a pointer. Without this, 115BAC (25 sections) outweighed 91 (3 sections)
+		# purely by being common.
+		weight = 1.0 / math.log(1 + len(matches))
+		for section, occurrences in matches.items():
+			found[section] = found.get(section, 0.0) + weight * (min(3.0, occurrences) / 3.0)
 	return sorted(found.items(), key=lambda pair: pair[1], reverse=True)[:6]
+
+
+def sections_citing(ref: str | None, markdown: list[tuple[str, str]]) -> dict[str, int]:
+	"""`section -> occurrence count` for one provision."""
+	if not ref:
+		return {}
+	pattern = provision_pattern(ref)
+	hits: dict[str, int] = {}
+	for section, text in markdown:
+		if not text:
+			continue
+		occurrences = len(pattern.findall(text))
+		if occurrences:
+			hits[section] = occurrences
+	return hits
 
 
 def rank_topics(

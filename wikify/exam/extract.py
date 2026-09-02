@@ -156,6 +156,13 @@ def question_blocks(entries: list[tuple[int, str]]) -> list[dict]:
 	Each block still contains ICAI's model answers; stripping those is the LLM's job, not a
 	regex's, because an answer ends wherever the next question begins and nothing in the
 	text marks that boundary reliably.
+
+	The headings are NOT assumed contiguous. November 2024 (Paper 4) never prints its
+	"Question 2" heading, so the numbering runs 1, 3, 4, 5, 6 and everything ICAI set as
+	Question 2 falls inside the Question 1 block. Each block therefore records the numbers it
+	swallowed in `merged_questions`, so the marks arithmetic can stop treating the whole 28-mark
+	block as the compulsory question's — see `apply_optionality` — and the paper can be reported
+	as needing a human look.
 	"""
 	starts: list[tuple[int, int]] = []
 	for index, (_page, line) in enumerate(entries):
@@ -165,11 +172,15 @@ def question_blocks(entries: list[tuple[int, str]]) -> list[dict]:
 
 	blocks = []
 	for position, (index, number) in enumerate(starts):
-		end = starts[position + 1][0] if position + 1 < len(starts) else len(entries)
-		span = entries[index:end]
+		next_index, next_number = starts[position + 1] if position + 1 < len(starts) else (len(entries), None)
+		span = entries[index:next_index]
+		# Only a forward gap counts. Numbering that repeats or goes backwards is a paper holding
+		# several question papers end to end, not a heading the typesetter dropped.
+		merged = list(range(number + 1, next_number)) if next_number and next_number > number else []
 		blocks.append(
 			{
 				"question_no": number,
+				"merged_questions": merged,
 				"page_no": span[0][0],
 				"text": "\n".join(line for _page, line in span),
 			}
@@ -263,6 +274,12 @@ def structure_block(block: dict, model: str, api_key: str) -> list[dict]:
 	for position, entry in enumerate(questions):
 		entry["marks"] = marks[position] if position < len(marks) else 0.0
 		entry.setdefault("page_no", block["page_no"])
+		# Which printed heading this entry came out of, and which headings that block swallowed.
+		# The model's own `question_no` cannot answer that: in a block with a missing heading it
+		# numbers the sub-parts from what it sees printed, which is exactly what is missing.
+		entry["block_question_no"] = block["question_no"]
+		if block.get("merged_questions"):
+			entry["merged_questions"] = list(block["merged_questions"])
 	return {
 		"questions": questions[: len(marks)],
 		"expected": len(marks),
@@ -334,8 +351,17 @@ def apply_optionality(questions: list[dict], optionality: dict, part: str) -> No
 	compulsory = optionality.get("compulsory_question")
 	choose = optionality.get("choose_count")
 	for entry in questions:
-		number = top_level_number(entry.get("question_no"))
-		if compulsory is not None and number == compulsory:
+		number = entry.get("block_question_no") or top_level_number(entry.get("question_no"))
+		if choose and entry.get("merged_questions"):
+			# A block whose next heading skipped a number carries several printed questions in
+			# one total, and nothing in the text says where one ends. Flagging the whole block
+			# compulsory is what inflated November 2024's attemptable marks from 73 to 81, so it
+			# joins the choice group instead and `attemptable_marks` splits it across the
+			# questions it covers.
+			entry["is_compulsory"] = 0
+			entry["choice_group"] = "descriptive-choice"
+			entry["choose_count"] = choose
+		elif compulsory is not None and number == compulsory:
 			entry["is_compulsory"] = 1
 		elif choose:
 			entry["is_compulsory"] = 0
@@ -353,6 +379,12 @@ def attemptable_marks(questions: list[dict], optionality: dict) -> float:
 	The compulsory questions count in full. For the choice group, only the `choose_count`
 	highest-scoring alternatives count — using the highest rather than an average keeps this
 	an upper bound, so the figure can never overstate what a topic was worth.
+
+	A block that swallowed a missing `Question N` heading is the one place a single alternative
+	covers several printed questions. Its total is split evenly across them, and one share is
+	credited to the compulsory question when the compulsory number falls inside the block. An
+	even split can only lower the "best N" sum relative to the true division of those marks, so
+	the figure stays the upper bound the rest of this function is careful to be.
 	"""
 	compulsory_total = sum(float(q.get("marks") or 0) for q in questions if q.get("is_compulsory"))
 
@@ -361,11 +393,24 @@ def attemptable_marks(questions: list[dict], optionality: dict) -> float:
 	if not optional or not choose:
 		return compulsory_total + sum(float(q.get("marks") or 0) for q in optional)
 
-	by_question: dict[int, float] = {}
+	blocks: dict[int | None, dict] = {}
 	for entry in optional:
-		number = top_level_number(entry.get("question_no"))
-		by_question[number] = by_question.get(number, 0.0) + float(entry.get("marks") or 0)
-	best = sorted(by_question.values(), reverse=True)[:choose]
+		number = entry.get("block_question_no") or top_level_number(entry.get("question_no"))
+		block = blocks.setdefault(number, {"marks": 0.0, "covers": {number}})
+		block["marks"] += float(entry.get("marks") or 0)
+		block["covers"].update(entry.get("merged_questions") or ())
+
+	compulsory_number = optionality.get("compulsory_question")
+	alternatives: list[float] = []
+	for block in blocks.values():
+		share = block["marks"] / len(block["covers"])
+		shares = [share] * len(block["covers"])
+		# `is not None` matters: an entry whose number could not be read is keyed under None,
+		# and a paper printing no compulsory sentence would otherwise credit it in full.
+		if compulsory_number is not None and compulsory_number in block["covers"]:
+			compulsory_total += shares.pop()
+		alternatives.extend(shares)
+	best = sorted(alternatives, reverse=True)[:choose]
 	return compulsory_total + sum(best)
 
 
@@ -455,6 +500,15 @@ def extract_paper(paper: str) -> dict:
 		descriptive: list[dict] = []
 		disagreements: list[dict] = []
 		blocks = question_blocks(parts["descriptive"])
+		missing_headings = [
+			{
+				"in_block": block["question_no"],
+				"missing": block["merged_questions"],
+				"block_marks": sum(marks_markers(block["text"])),
+			}
+			for block in blocks
+			if block["merged_questions"]
+		]
 		for position, block in enumerate(blocks, start=1):
 			# 25% -> 85% spread across the descriptive questions, which are the slow part:
 			# one LLM call each, several seconds apiece.
@@ -512,4 +566,9 @@ def extract_paper(paper: str) -> dict:
 		# marker count is the signal that its segmentation is untrustworthy for that question,
 		# even though the marks themselves were forced to match the markers.
 		"segmentation_disagreements": disagreements,
+		# Same reason: a `Question N` heading the paper never printed means one block holds
+		# several questions. The marks are still right in total and the arithmetic no longer
+		# treats them all as compulsory, but which sub-part belonged to which question is a
+		# judgement only a reader can make.
+		"missing_question_headings": missing_headings,
 	}

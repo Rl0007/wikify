@@ -19,17 +19,31 @@ The load-bearing assertions:
     whole MCQ section — reading the head instead marks every question compulsory and inflates
     attemptable marks back up to the printed total.
   - `attemptable_marks` honours optionality and can never exceed the printed total.
+  - `Question N` headings are not assumed contiguous. November 2024 never prints its "Question
+    2" heading, and treating the merged 28-mark block as the compulsory question wiped out the
+    paper's entire optionality discount — see `TestNovember2024MissingHeading`.
   - re-extracting a paper replaces its questions instead of doubling them, and takes the
     `Question Topic Link` children with it.
 """
 
+import os
+import re
+import unittest
 from typing import ClassVar
 from unittest.mock import patch
 
 import frappe
 from frappe.tests.utils import FrappeTestCase
 
-from wikify.exam import extract
+from wikify.exam import extract, ingest
+
+# The real paper the contiguity bug was found on: ICAI never printed its "Question 2" heading,
+# so the headings run 1, 3, 4, 5, 6. It lives outside the app (bench root), so the tests that
+# read it skip rather than fail where the corpus is not checked out.
+NOVEMBER_2024_PDF = os.path.join(
+	frappe.utils.get_bench_path(), "qp-data", "icai-ca-final-dt", "2024-11-sa-p4.pdf"
+)
+HAVE_NOVEMBER_2024 = os.path.isfile(NOVEMBER_2024_PDF)
 
 # One descriptive question in the shape that produced the inflation: items (i)-(iv) are
 # enumerated INSIDE the second sub-part and only the sub-part carries a marker.
@@ -216,6 +230,37 @@ class TestExamExtractParsing(FrappeTestCase):
 		self.assertNotIn("section 115BAC", blocks[0]["text"])
 		self.assertIn("section 115BAC", blocks[1]["text"])
 
+	def test_a_contiguous_paper_reports_no_merged_questions(self):
+		entries = extract.drop_boilerplate(entries_from(OLD_SCHEME_PAPER))
+		blocks = extract.question_blocks(entries)
+
+		self.assertEqual([block["merged_questions"] for block in blocks], [[], []])
+
+	def test_a_block_records_the_heading_the_paper_never_printed(self):
+		"""The November 2024 shape: headings run 1, 3 — everything ICAI set as Question 2 is
+		inside the Question 1 block, and only the numbering says so."""
+		paper = OLD_SCHEME_PAPER.replace("Question 2", "Question 3")
+		blocks = extract.question_blocks(extract.drop_boilerplate(entries_from(paper)))
+
+		self.assertEqual([block["question_no"] for block in blocks], [1, 3])
+		self.assertEqual(blocks[0]["merged_questions"], [2])
+		self.assertEqual(blocks[1]["merged_questions"], [])
+
+	def test_a_gap_of_several_headings_records_all_of_them(self):
+		paper = OLD_SCHEME_PAPER.replace("Question 2", "Question 5")
+		blocks = extract.question_blocks(extract.drop_boilerplate(entries_from(paper)))
+
+		self.assertEqual(blocks[0]["merged_questions"], [2, 3, 4])
+
+	def test_numbering_that_restarts_is_a_second_paper_not_a_dropped_heading(self):
+		"""One ICAI file holds three sessions end to end. 1, 2, 1, 2 has no gap in it, and
+		reading the backwards step as 'the headings for 3..N are missing' would invent one."""
+		two_papers = OLD_SCHEME_PAPER + OLD_SCHEME_PAPER
+		blocks = extract.question_blocks(extract.drop_boilerplate(entries_from(two_papers)))
+
+		self.assertEqual([block["question_no"] for block in blocks], [1, 2, 1, 2])
+		self.assertEqual([block["merged_questions"] for block in blocks], [[], [], [], []])
+
 	def test_top_level_number_reads_the_leading_integer(self):
 		self.assertEqual(extract.top_level_number("3(b)(ii)"), 3)
 		self.assertEqual(extract.top_level_number("12"), 12)
@@ -287,6 +332,85 @@ class TestExamExtractOptionalityArithmetic(FrappeTestCase):
 				extract.apply_optionality(questions, self.OPTIONALITY, "descriptive")
 				attemptable = extract.attemptable_marks(questions, self.OPTIONALITY)
 				self.assertLessEqual(attemptable, sum(marks))
+
+	def merged_paper(self) -> list[dict]:
+		"""The November 2024 shape: Q1's block swallowed Q2, so 28 marks arrive as one block.
+
+		`block_question_no` is the printed heading the entry came out of, and `merged_questions`
+		the headings that block swallowed — both set by `structure_block`.
+		"""
+		block_one = [
+			{"question_no": "1(a)", "marks": 14.0, "block_question_no": 1, "merged_questions": [2]},
+			{"question_no": "1(b)", "marks": 8.0, "block_question_no": 1, "merged_questions": [2]},
+			{"question_no": "1(c)", "marks": 6.0, "block_question_no": 1, "merged_questions": [2]},
+		]
+		rest = [
+			{"question_no": "3", "marks": 14.0, "block_question_no": 3},
+			{"question_no": "4", "marks": 17.0, "block_question_no": 4},
+			{"question_no": "5", "marks": 8.0, "block_question_no": 5},
+			{"question_no": "6", "marks": 14.0, "block_question_no": 6},
+		]
+		return block_one + rest
+
+	def test_a_block_that_swallowed_a_heading_is_not_flagged_wholly_compulsory(self):
+		"""28 marks of merged block, of which only Q1's share is compulsory — and which share
+		that is cannot be read off the text, so none of it is stored as compulsory."""
+		questions = self.merged_paper()
+		extract.apply_optionality(questions, self.OPTIONALITY, "descriptive")
+
+		for entry in questions[:3]:
+			self.assertEqual(entry["is_compulsory"], 0)
+			self.assertEqual(entry["choice_group"], "descriptive-choice")
+		self.assertTrue(all(entry["is_compulsory"] == 0 for entry in questions[3:]))
+
+	def test_a_swallowed_heading_no_longer_wipes_out_the_optionality_discount(self):
+		"""The defect: all 28 marks counted as compulsory, so attemptable == the printed total.
+
+		Split evenly across the two questions the block covers, Q1 is worth 14 compulsory and
+		Q2 joins the choice group — the paper's cheapest alternative (Q5's 8) is dropped again.
+		"""
+		questions = self.merged_paper()
+		extract.apply_optionality(questions, self.OPTIONALITY, "descriptive")
+
+		total = sum(entry["marks"] for entry in questions)
+		attemptable = extract.attemptable_marks(questions, self.OPTIONALITY)
+
+		self.assertEqual(total, 81.0)
+		# 14 compulsory + best four of {14, 14, 17, 8, 14} = 14 + 59.
+		self.assertEqual(attemptable, 73.0)
+		self.assertLess(attemptable, total, "the paper prints 'answer any four of five'")
+
+	def test_a_swallowed_heading_among_the_optional_questions_still_drops_one(self):
+		"""A gap that misses the compulsory question entirely: the block is two alternatives
+		worth the same, not one worth double, so the choice arithmetic keeps working."""
+		questions = [
+			{"question_no": "1", "marks": 14.0, "block_question_no": 1},
+			{"question_no": "2", "marks": 14.0, "block_question_no": 2},
+			{"question_no": "3(a)", "marks": 16.0, "block_question_no": 3, "merged_questions": [4]},
+			{"question_no": "3(b)", "marks": 12.0, "block_question_no": 3, "merged_questions": [4]},
+			{"question_no": "5", "marks": 14.0, "block_question_no": 5},
+			{"question_no": "6", "marks": 8.0, "block_question_no": 6},
+		]
+		extract.apply_optionality(questions, self.OPTIONALITY, "descriptive")
+
+		self.assertEqual(questions[0]["is_compulsory"], 1)
+		# 14 compulsory + best four of {14, 14, 14, 14, 8} — the 8-mark Q6 is the one dropped.
+		self.assertEqual(extract.attemptable_marks(questions, self.OPTIONALITY), 70.0)
+
+	def test_a_question_whose_number_cannot_be_read_is_never_credited_as_compulsory(self):
+		"""Unreadable numbers key under None, which must not match a `None` compulsory question.
+
+		A paper can print "answer any four" without printing a compulsory sentence, and treating
+		an unnumbered block as the compulsory one counts it in full — the inflation again.
+		"""
+		optionality = {"compulsory_question": None, "choose_count": 4, "choice_size": 5}
+		questions = [{"question_no": "(a)", "marks": 20.0}] + [
+			{"question_no": str(number), "marks": 10.0} for number in range(2, 7)
+		]
+		extract.apply_optionality(questions, optionality, "descriptive")
+
+		# Every question is optional here, so the best four of {20, 10, 10, 10, 10, 10} count.
+		self.assertEqual(extract.attemptable_marks(questions, optionality), 50.0)
 
 	def test_an_unparsed_optionality_sentence_discounts_nothing(self):
 		"""No sentence read → everything compulsory, rather than a guessed discount."""
@@ -369,6 +493,142 @@ class TestExamStructureBlock(FrappeTestCase):
 			outcome = extract.structure_block(block, "stub-model", "stub-key")
 
 		self.assertEqual(outcome, [])
+
+
+def stub_one_question_per_marker(model, messages, **kwargs):
+	"""A `chat_completion` stand-in that agrees with the printed markers.
+
+	Part I returns nothing — this paper's MCQs are not what is under test, and the descriptive
+	marks are the ones the missing heading distorts. For a descriptive block it returns exactly
+	as many entries as the prompt says there are markers, which is the well-behaved case: the
+	arithmetic under test is then the only thing that can move the numbers.
+	"""
+	if kwargs.get("label") == "exam.mcq":
+		return {"choices": [{"message": {"content": '{"questions": []}'}}]}
+	count = int(re.search(r"EXACTLY (\d+) sub-part", messages[0]["content"]).group(1))
+	questions = [
+		{
+			"question_no": f"sub-part {position}",
+			"kind": "Descriptive",
+			"text": "Question text.",
+			"statutory_refs": [],
+		}
+		for position in range(1, count + 1)
+	]
+	return {"choices": [{"message": {"content": frappe.as_json({"questions": questions})}}]}
+
+
+@unittest.skipUnless(HAVE_NOVEMBER_2024, f"question-paper corpus not present at {NOVEMBER_2024_PDF}")
+class TestNovember2024MissingHeading(FrappeTestCase):
+	"""The real paper the contiguity bug was found on, driven end to end with a stubbed model.
+
+	ICAI's November 2024 Paper 4 never prints its "Question 2" heading, so the 14 marks it set
+	as Question 2 land inside the Question 1 block. Question 1 is the compulsory one, so the
+	whole 28-mark block was counted as compulsory and the paper's attemptable marks came out at
+	81 — its full printed total, discounting nothing, on a paper that prints "answer any four
+	questions out of the remaining five".
+
+	`extract_paper` commits (`report_stage` has to, so a waiting user sees progress), which
+	defeats the `FrappeTestCase` rollback — hence the raw-delete sweep.
+	"""
+
+	def setUp(self):
+		suffix = frappe.generate_hash(length=8)
+		self.paper = None
+		self.project = frappe.get_doc(
+			{"doctype": "Wikify Project", "project_name": f"Exam Contiguity Test {suffix}"}
+		).insert(ignore_permissions=True)
+		self.addCleanup(self.sweep)
+		self.paper = ingest.register_paper(
+			NOVEMBER_2024_PDF,
+			project=self.project.name,
+			exam_month="November",
+			exam_year=2024,
+			paper_code="Paper 4",
+		)["paper"]
+
+	def sweep(self):
+		frappe.db.rollback()
+		if self.paper:
+			names = frappe.get_all("Wikify Exam Question", filters={"exam_paper": self.paper}, pluck="name")
+			if names:
+				frappe.db.delete("Question Topic Link", {"parent": ["in", names]})
+				frappe.db.delete("Wikify Exam Question", {"name": ["in", names]})
+			frappe.db.delete(
+				"File", {"attached_to_doctype": "Wikify Exam Paper", "attached_to_name": self.paper}
+			)
+			frappe.db.delete("Wikify Exam Paper", {"name": self.paper})
+		frappe.db.delete("Wikify Project", {"name": self.project.name})
+		frappe.db.commit()
+
+	def descriptive_blocks(self) -> list[dict]:
+		entries = extract.drop_boilerplate(extract.page_lines(NOVEMBER_2024_PDF))
+		return extract.question_blocks(extract.split_parts(entries)["descriptive"])
+
+	def test_the_printed_headings_skip_question_2(self):
+		blocks = self.descriptive_blocks()
+
+		self.assertEqual([block["question_no"] for block in blocks], [1, 3, 4, 5, 6])
+		self.assertEqual(blocks[0]["merged_questions"], [2])
+		self.assertEqual([block["merged_questions"] for block in blocks[1:]], [[], [], [], []])
+		# 14 marks of Question 1 plus the 14 ICAI set as Question 2, in one block.
+		self.assertEqual(extract.marks_markers(blocks[0]["text"]), [14.0, 8.0, 6.0])
+
+	def test_the_optionality_sentence_this_paper_prints_is_read(self):
+		"""Without this, nothing would be discounted for a reason unrelated to the heading."""
+		entries = extract.drop_boilerplate(extract.page_lines(NOVEMBER_2024_PDF))
+		optionality = extract.parse_optionality(extract.split_parts(entries)["descriptive"])
+
+		self.assertEqual(optionality, {"compulsory_question": 1, "choose_count": 4, "choice_size": 5})
+
+	def test_extraction_reports_the_missing_heading_and_stops_inflating_the_marks(self):
+		with (
+			patch.object(extract.settings, "get", return_value="stub-model"),
+			patch.object(extract.settings, "openrouter_key", return_value="stub-key"),
+			patch.object(extract.llm, "chat_completion", side_effect=stub_one_question_per_marker),
+		):
+			report = extract.extract_paper(self.paper)
+
+		self.assertEqual(
+			report["missing_question_headings"],
+			[{"in_block": 1, "missing": [2], "block_marks": 28.0}],
+		)
+		self.assertEqual(report["segmentation_disagreements"], [])
+		# The printed total is untouched — no marks were dropped, only re-attributed.
+		self.assertEqual(report["total_marks"], 81.0)
+		# 14 (Q1's share of the merged block) + the best four of {14, 14, 17, 8, 14}. It used to
+		# be 28 + 53 = 81, i.e. the printed total, discounting nothing at all.
+		self.assertEqual(report["attemptable_marks"], 73.0)
+		self.assertLess(report["attemptable_marks"], report["total_marks"])
+		self.assertEqual(
+			frappe.db.get_value("Wikify Exam Paper", self.paper, "attempted_marks"),
+			73.0,
+		)
+
+	def test_no_question_from_the_merged_block_is_stored_as_compulsory(self):
+		"""The stored rows lean the safe way, and this paper ends up with no compulsory row.
+
+		`score.attemptable_weight` reads `is_compulsory` as weight 1. Q1's 14 marks really are
+		compulsory, but which of the merged block's sub-parts are Q1's cannot be read off the
+		text — so they are stored as choice-group members and weighted 4/5 like the rest. That
+		slightly UNDER-weights this paper, which is the direction the whole module errs in; the
+		alternative was weighting Q2's 14 marks as certain to be answered.
+		"""
+		with (
+			patch.object(extract.settings, "get", return_value="stub-model"),
+			patch.object(extract.settings, "openrouter_key", return_value="stub-key"),
+			patch.object(extract.llm, "chat_completion", side_effect=stub_one_question_per_marker),
+		):
+			extract.extract_paper(self.paper)
+
+		rows = frappe.get_all(
+			"Wikify Exam Question",
+			filters={"exam_paper": self.paper},
+			fields=["marks", "is_compulsory", "choice_group"],
+		)
+		self.assertEqual(sum(row["marks"] for row in rows), 81.0)
+		self.assertEqual([row for row in rows if row["is_compulsory"]], [])
+		self.assertTrue(all(row["choice_group"] == "descriptive-choice" for row in rows))
 
 
 class TestExamQuestionStorage(FrappeTestCase):
