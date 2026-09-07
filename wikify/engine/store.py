@@ -349,12 +349,15 @@ def replace_sections(source_document: str, sections) -> int:
 	reindex hook, so sectionising a 296-section document cost ~600 redis round trips to
 	coalesce down to the single project rebuild this queues directly — half of them the
 	no-op "already queued" branch.
+
+	Delete and inserts share a savepoint, so the replacement is all-or-nothing. Without
+	one, an insert that threw left the document holding whatever prefix of the new tree
+	had landed and none of the old — and the remediate job's handler reverts the import to
+	`Review` on the stated premise that "the parse result is intact", then commits, so the
+	truncated tree became the document. A failed rebuild now leaves the previous tree
+	standing and that premise holds.
 	"""
 	from wikify.rag import events
-
-	# Full rebuild: raw-delete this doc's sections (other docs' subtrees are
-	# independent number-spaces, so NestedSet stays consistent without a global rebuild).
-	frappe.db.delete("Source Section", {"source_document": source_document})
 
 	parent_paths = {tuple(s.hierarchy_path[:-1]) for s in sections if len(s.hierarchy_path) > 1}
 	path_to_name: dict[tuple[str, ...], str] = {}
@@ -363,7 +366,12 @@ def replace_sections(source_document: str, sections) -> int:
 	# clearing it here would re-arm per-row indexing for the rest of that context.
 	skip_reindex_was = frappe.flags.wikify_skip_reindex
 	frappe.flags.wikify_skip_reindex = True
+	save_point = "wikify_replace_sections"
+	frappe.db.savepoint(save_point)
 	try:
+		# Full rebuild: raw-delete this doc's sections (other docs' subtrees are
+		# independent number-spaces, so NestedSet stays consistent without a global rebuild).
+		frappe.db.delete("Source Section", {"source_document": source_document})
 		for idx, sec in enumerate(sections):
 			doc = frappe.new_doc("Source Section")
 			doc.source_document = source_document
@@ -379,19 +387,21 @@ def replace_sections(source_document: str, sections) -> int:
 			doc.markdown = sec.markdown
 			doc.insert(ignore_permissions=True)
 			path_to_name[tuple(sec.hierarchy_path)] = doc.name
+	except Exception:
+		# The old tree is what the index still holds, so restoring it needs no rebuild.
+		frappe.db.rollback(save_point=save_point)
+		raise
 	finally:
 		frappe.flags.wikify_skip_reindex = skip_reindex_was
-		# Queued even when an insert threw: the tree is already partly rewritten, and the
-		# per-row hook this replaces would have queued a rebuild for every row that landed.
-		# A document outside any project has nothing to scope an index to; it becomes
-		# searchable when it is assigned to one (which reindexes then).
-		project = (
-			None
-			if suspended_by_caller
-			else frappe.db.get_value("Source Document", source_document, "project")
-		)
-		if project:
-			events.queue_project_rebuild(project)
+	frappe.db.release_savepoint(save_point)
+
+	# Success only. A document outside any project has nothing to scope an index to; it
+	# becomes searchable when it is assigned to one (which reindexes then).
+	project = (
+		None if suspended_by_caller else frappe.db.get_value("Source Document", source_document, "project")
+	)
+	if project:
+		events.queue_project_rebuild(project)
 
 	# 0.5: the tree (and its page spans) just changed wholesale — rebuild the
 	# document's reference edges against it. Runs after all inserts so every
