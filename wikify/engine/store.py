@@ -200,9 +200,23 @@ def get_canonical_composites(source_document: str) -> list[float | None]:
 
 
 def set_canonical_markdown(page_name: str, markdown: str) -> None:
-	"""Overwrite a page's canonical markdown in place (furniture-strip finalize), leaving
-	its provenance untouched."""
-	frappe.db.set_value("Source Page", page_name, "canonical_markdown", markdown)
+	"""Overwrite a page's canonical markdown in place (furniture-strip finalize, agent edit),
+	dropping the score that described the text being replaced and leaving provenance alone.
+
+	The badge has to describe the content the user is actually reading — the same rule
+	`set_canonical` follows. Keeping the old one left "pass 0.99" sitting on text nobody had
+	scored, which is a stronger claim than the pipeline is entitled to make.
+
+	Cleared rather than re-derived: scoring a page needs its image and its baseline, so it is
+	a verify pass, not something a write seam can do. `canonical_composite` is a Float (NOT
+	NULL), so unscored reads as 0 — the value `backfill_canonical_verdict` already skips, and
+	the review UI already renders an empty verdict as an unscored dash.
+	"""
+	frappe.db.set_value(
+		"Source Page",
+		page_name,
+		{"canonical_markdown": markdown, "canonical_composite": 0, "verdict": ""},
+	)
 	invalidate_page(page_name)
 
 

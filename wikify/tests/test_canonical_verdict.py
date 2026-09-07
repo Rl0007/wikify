@@ -106,3 +106,53 @@ class TestCanonicalVerdict(FrappeTestCase):
 		# Second run has nothing left to move, site-wide.
 		self.assertEqual(backfill_canonical_verdict(), {})
 		self.assertEqual(self.verdict_of(stale), "pass")
+
+
+class TestUnscoredCanonicalMarkdown(FrappeTestCase):
+	"""Rewriting canonical markdown in place must not leave the old score describing it.
+
+	`set_canonical_markdown` is the furniture-strip finalize and the agent's page edit. It
+	replaces the text and scores nothing, so a page could read "pass 0.99" over content
+	nobody had ever verified — the one stale-badge shape the canonical-verdict fix missed,
+	because that fix only covered the seam that carries a new composite.
+	"""
+
+	def setUp(self):
+		self.source_document = frappe.get_doc(
+			{"doctype": "Source Document", "title": "Unscored Edit Test", "page_count": 1}
+		).insert(ignore_permissions=True)
+		self.page = frappe.new_doc("Source Page")
+		self.page.source_document = self.source_document.name
+		self.page.page_no = 1
+		self.page.kind = "text"
+		self.page.baseline_markdown = "baseline page 1"
+		self.page.insert(ignore_permissions=True)
+		store.set_canonical(self.page.name, "verified body", 0.99, "vlm")
+
+	def row(self):
+		return frappe.db.get_value(
+			"Source Page",
+			self.page.name,
+			["verdict", "canonical_composite", "canonical_source", "canonical_markdown"],
+			as_dict=True,
+		)
+
+	def test_a_rewrite_drops_the_verdict_it_no_longer_describes(self):
+		self.assertEqual(self.row().verdict, "pass")
+
+		store.set_canonical_markdown(self.page.name, "hand-edited body")
+
+		row = self.row()
+		self.assertEqual(row.canonical_markdown, "hand-edited body")
+		self.assertFalse(row.verdict)
+		self.assertEqual(row.canonical_composite, 0)
+
+	def test_provenance_survives_the_rewrite(self):
+		"""Where the text came from is still true after an edit; how good it is, is not."""
+		store.set_canonical_markdown(self.page.name, "hand-edited body")
+		self.assertEqual(self.row().canonical_source, "vlm")
+
+	def test_the_backfill_does_not_rebadge_an_unscored_page(self):
+		store.set_canonical_markdown(self.page.name, "hand-edited body")
+		backfill_canonical_verdict()
+		self.assertFalse(self.row().verdict)
