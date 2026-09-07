@@ -290,10 +290,24 @@ Current results on the demo corpus:
 ⚠️ Routed numbers are a **range**, not a point, because routing is an LLM call and
 therefore non-deterministic. Quote it honestly.
 
-On the real ICAI document, graded against the source PDF: **7 of 12 correct**. Failure
-modes worth knowing: a false refusal when the reranker misfired, and a fabricated category
-caused by a mind-map diagram being flattened into a bullet list — the structure was lost
-at *parse* time, long before retrieval ran.
+On the real ICAI document, graded against the source PDF: **7 of 12 correct**.
+
+⚠️ **That figure is stale and is not a claim about the system as it stands.** It was
+graded before the coverage, sectioning and reranker fixes landed, and both failure modes
+it turned on have been worked on since: a false refusal when the reranker misfired (the
+refusal now needs two legs to agree, so a below-floor rerank is overruled by a strong
+embedding match), and a fabricated category caused by a mind-map diagram being flattened
+into a bullet list — the structure was lost at *parse* time, long before retrieval ran.
+Whether the grade moved is unmeasured; do not quote 7/12 as current, and do not assume it
+improved either.
+
+Re-grading needs one thing this repo does not yet carry: **the twelve questions
+themselves are not written down anywhere.** They were asked by hand against the source
+PDF and only the score survived, so the run cannot be reproduced or compared against.
+Whoever re-grades should record the question set the way `rag/eval.py` records the golden
+questions — transcribed literally, so the next person can re-run it instead of re-inventing
+it — and this is a fair illustration of why that file argues for transcribed ground truth
+in the first place.
 
 > **Lesson:** most RAG quality problems are actually **ingestion** problems. Our single
 > biggest win today wasn't a retrieval tweak — it was discovering that a 168-character
