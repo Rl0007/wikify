@@ -9,6 +9,10 @@ another as parallel dangling branches — nothing bound a slab to its rate, so a
 from the output would quote the wrong statutory rate. These tests hold the two halves of the
 fix: the gate rejects that shape, and the markdown we now store binds each slab to exactly one
 rate in its own row.
+
+The gate judges meaning, not syntax. It used to approximate mermaid's grammar in regex and
+discard anything it could not read, while the reader renders with the real parser — so these
+also pin that unfamiliar-but-valid constructs survive it.
 """
 
 from __future__ import annotations
@@ -64,7 +68,7 @@ def table_rows(markdown: str) -> list[list[str]]:
 
 class TestMermaidGate(unittest.TestCase):
 	def test_flattened_table_is_rejected(self):
-		errors = diagrams.diagram_errors(FLATTENED_TABLE_MERMAID)
+		errors = diagrams.grid_errors(FLATTENED_TABLE_MERMAID)
 		self.assertTrue(errors, "a grid flattened into parallel dangling branches must be rejected")
 		self.assertTrue(
 			any("bare values" in error or "parallel leaf groups" in error for error in errors),
@@ -72,12 +76,22 @@ class TestMermaidGate(unittest.TestCase):
 		)
 
 	def test_genuine_flow_is_kept(self):
-		self.assertEqual(diagrams.diagram_errors(GENUINE_FLOW_MERMAID), [])
+		self.assertEqual(diagrams.grid_errors(GENUINE_FLOW_MERMAID), [])
 
-	def test_broken_syntax_is_rejected(self):
-		self.assertTrue(diagrams.diagram_errors('flowchart TD\n\tA["unbalanced] --> B["ok"]'))
-		self.assertTrue(diagrams.diagram_errors("sequenceDiagram\n\tA ->> B: hi"))
-		self.assertTrue(diagrams.diagram_errors('flowchart TD\n\tA["lonely node"]'))
+	def test_syntax_is_left_to_the_renderer_that_owns_the_real_parser(self):
+		"""These were all rejected here on a regex's opinion of mermaid's grammar. A block
+		that genuinely will not parse now fails in the reader, which shows an error chip over
+		the block's own source, instead of being deleted on a guess that is only ever behind
+		the real grammar."""
+		self.assertEqual(diagrams.grid_errors('flowchart TD\n\tA["unbalanced] --> B["ok"]'), [])
+		self.assertEqual(diagrams.grid_errors('flowchart TD\n\tA["lonely node"]'), [])
+
+	def test_a_diagram_type_we_do_not_analyse_is_not_condemned_for_being_unfamiliar(self):
+		self.assertEqual(diagrams.grid_errors("sequenceDiagram\n\tA ->> B: hi"), [])
+		self.assertEqual(diagrams.grid_errors("stateDiagram-v2\n\t[*] --> Still"), [])
+
+	def test_an_empty_block_is_still_rejected(self):
+		self.assertEqual(diagrams.grid_errors("   "), ["empty diagram"])
 
 	def test_rejected_block_falls_back_to_the_source_crop(self):
 		markdown = f"# Surcharge\n\n```mermaid\n{FLATTENED_TABLE_MERMAID}```\n"
@@ -100,16 +114,11 @@ class TestMermaidGate(unittest.TestCase):
 class TestLabelRepair(unittest.TestCase):
 	"""Correct content must not be thrown away over a missing pair of quotes."""
 
-	def test_the_statutory_bracket_statement_is_the_one_that_used_to_be_rejected(self):
-		errors = diagrams.diagram_errors(STATUTORY_BRACKET_MERMAID)
-		self.assertIn(
-			"unparseable statement: 'A[CAPITAL ASSET<br>[Section 2(14)]] --> B[Property of any ki'",
-			errors,
-		)
-
-	def test_repair_makes_it_validate(self):
+	def test_repair_makes_the_statutory_brackets_parseable(self):
+		"""Real mermaid 11 rejects this string and accepts the quoted repair of it — the
+		repair is what earns the diagram its place, not the gate's opinion of the original."""
 		repaired = diagrams.quote_node_labels(STATUTORY_BRACKET_MERMAID)
-		self.assertEqual(diagrams.diagram_errors(repaired), [])
+		self.assertEqual(diagrams.grid_errors(repaired), [])
 		self.assertIn('A["CAPITAL ASSET<br>[Section 2(14)]"]', repaired)
 		self.assertIn('C["Excludes stock-in-trade [Section 2(14)(a)]"]', repaired)
 
@@ -122,7 +131,7 @@ class TestLabelRepair(unittest.TestCase):
 		self.assertIn("Section 2(14)", cleaned)
 		blocks = diagrams.mermaid_blocks(cleaned)
 		self.assertEqual(len(blocks), 1)
-		self.assertEqual(diagrams.diagram_errors(blocks[0]), [])
+		self.assertEqual(diagrams.grid_errors(blocks[0]), [])
 
 	def test_repair_adds_quotes_and_nothing_else(self):
 		repaired = diagrams.quote_node_labels(STATUTORY_BRACKET_MERMAID)
@@ -134,12 +143,12 @@ class TestLabelRepair(unittest.TestCase):
 	def test_an_inner_quote_is_escaped_rather_than_doubled(self):
 		repaired = diagrams.quote_node_labels('flowchart TD\n\tA[He said "yes"] --> B[ok]\n')
 		self.assertIn('A["He said #quot;yes#quot;"]', repaired)
-		self.assertEqual(diagrams.diagram_errors(repaired), [])
+		self.assertEqual(diagrams.grid_errors(repaired), [])
 
 	def test_a_semicolon_inside_a_label_does_not_split_the_statement(self):
 		source = 'flowchart TD\n\tA["Rs 1,00,000; see proviso"] --> B["ok"]\n'
 		self.assertEqual(diagrams.statements(source), ['A["Rs 1,00,000; see proviso"] --> B["ok"]'])
-		self.assertEqual(diagrams.diagram_errors(source), [])
+		self.assertEqual(diagrams.grid_errors(source), [])
 
 	def test_ampersand_node_chaining_is_understood(self):
 		"""`A & B --> C` is valid mermaid (real mermaid 11 parses it) and used to be rejected as
@@ -149,13 +158,13 @@ class TestLabelRepair(unittest.TestCase):
 			'\tA["Land"] --> N & O & P\n'
 			'\tN & O & P --- S["These assets are hence, capital assets"]\n'
 		)
-		self.assertEqual(diagrams.diagram_errors(source), [])
+		self.assertEqual(diagrams.grid_errors(source), [])
 		_labels, edges, _broken = diagrams.parse_flowchart(source)
 		self.assertIn(("A", "N"), edges)
 		self.assertIn(("P", "S"), edges)
 
 	def test_an_ampersand_inside_a_label_is_not_a_node_separator(self):
-		self.assertEqual(diagrams.diagram_errors('flowchart TD\n\tA["Profit & Loss"] --> B["ok"]\n'), [])
+		self.assertEqual(diagrams.grid_errors('flowchart TD\n\tA["Profit & Loss"] --> B["ok"]\n'), [])
 
 	def test_repair_never_rescues_a_flattened_table(self):
 		"""Quoting fixes syntax, never meaning — an unbound grid is still rejected."""
@@ -164,11 +173,21 @@ class TestLabelRepair(unittest.TestCase):
 		self.assertNotIn("mermaid", cleaned)
 		self.assertTrue(any("mermaid rejected" in note for note in notes))
 
-	def test_repair_never_rescues_broken_structure(self):
+	def test_nothing_but_a_flattened_grid_is_dropped(self):
+		"""The gate has exactly one rejection now, and it is about meaning."""
 		for source in ("flowchart TD\n\tA[lonely node]\n", "sequenceDiagram\n\tA ->> B: hi\n"):
 			cleaned, notes = diagrams.remove_unverified_diagrams(f"```mermaid\n{source}```\n", "")
-			self.assertNotIn("mermaid", cleaned)
-			self.assertTrue(any("mermaid rejected" in note for note in notes), notes)
+			self.assertIn("mermaid", cleaned)
+			self.assertFalse([note for note in notes if "rejected" in note], notes)
+
+	def test_an_unquoted_but_valid_diagram_is_repaired_not_discarded(self):
+		"""Losslessly quoting every label is the price of not judging syntax, and it is a
+		price worth paying: the stored text renders identically and parses more widely."""
+		markdown = "```mermaid\nflowchart TD\n\tA[Land] --> B[Building]\n```\n"
+		cleaned, notes = diagrams.remove_unverified_diagrams(markdown, "/files/x.png")
+		self.assertIn('A["Land"] --> B["Building"]', cleaned)
+		self.assertEqual(notes, ["mermaid repaired: node labels quoted"])
+		self.assertEqual(cleaned.replace('"', ""), markdown.replace('"', ""))
 
 
 class TestIcaiPage11(unittest.TestCase):
@@ -181,7 +200,7 @@ class TestIcaiPage11(unittest.TestCase):
 
 	def test_no_diagram_encodes_the_rate_table(self):
 		for source in diagrams.mermaid_blocks(self.markdown):
-			self.assertEqual(diagrams.diagram_errors(source), [], f"stored an ungated diagram: {source[:80]}")
+			self.assertEqual(diagrams.grid_errors(source), [], f"stored an ungated diagram: {source[:80]}")
 			self.assertFalse(_RATE_RE.search(source), "a surcharge rate is encoded in a flowchart")
 
 	def test_every_slab_binds_to_exactly_one_rate_in_its_own_row(self):

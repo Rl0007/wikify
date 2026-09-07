@@ -1,26 +1,36 @@
-"""Server-side mermaid gate: nothing unverified reaches the database.
+"""Server-side mermaid gate: nothing whose *meaning* is corrupt reaches the database.
 
-Two failures are caught here, both measured on the ICAI referencer:
+The dangerous failure, measured on the ICAI referencer, is **a table drawn as a flowchart**.
+`flowchart TD` is a tree grammar and a rate table is a 2-D grid, so the VLM flattens the grid
+into two parallel branches — the income slabs under one parent, the surcharge rates under
+another — with nothing binding a slab to its rate. A student reading it gets the rate wrong,
+and confidently wrong beats missing on every exam-prep metric. Any flowchart carrying the
+signature of a flattened grid is rejected, and the page keeps whatever HTML/pipe table and
+prose the model also produced; when nothing tabular survives, the page crop goes in instead,
+so the reader always has the original to read.
 
-1. **Broken syntax.** A diagram that does not parse renders as raw text (or as nothing) for the
-   reader. Storing it is storing a defect; we would rather store the page crop.
-2. **A table drawn as a flowchart.** This is the dangerous one. `flowchart TD` is a tree grammar
-   and a rate table is a 2-D grid, so the VLM flattens the grid into two parallel branches — the
-   income slabs under one parent, the surcharge rates under another — with nothing binding a slab
-   to its rate. A student reading it gets the rate wrong, and confidently wrong beats missing on
-   every exam-prep metric. Any flowchart carrying the signature of a flattened grid is rejected
-   whatever its syntax.
+**Syntax is not judged here.** It used to be: this module re-implemented enough of mermaid's
+grammar in regex to decide whether a block would parse, while the reader renders it with the
+real parser client-side. Every construct the regex did not know was read as broken and the
+diagram was discarded — `A & B --> C` is valid mermaid 11 and cost page 6 its diagram twice
+before it was special-cased, which is the shape of the whole problem: the approximation can
+only ever be behind. A block whose syntax is genuinely broken now fails where the real parser
+lives: `utils/mermaid.js` catches the parse error and renders an error chip above the block's
+own source, so the reader sees what was meant and that it did not draw. Note the crop fallback
+below does NOT cover that path — it fires only on the rejection this module still makes — and
+on a published Frappe Wiki page, which renders outside this SPA, such a block degrades to a
+plain code block.
 
-Before either verdict, one **lossless** repair is attempted: quoting node labels. ICAI prints
+What survives is the part regex is actually good at, and it is a *content* judgment rather
+than a grammatical one: reading node labels and edges to recognise a flattened grid. Guessing
+which rate belongs to which slab would be the same failure with better syntax, so that
+verdict stays.
+
+Every block is also passed through one **lossless** repair: quoting node labels. ICAI prints
 every statutory reference in square brackets, so the VLM writes `A[CAPITAL ASSET<br>[Section
 2(14)]]` — correct content that mermaid cannot parse, because the inner `]` closes the node
-early. `A["CAPITAL ASSET<br>[Section 2(14)]"]` is valid and reads identically. Repair only ever
-adds quotes; it never drops or rewrites a character, and the result still has to pass the full
-gate before it is stored. What is *not* repaired is meaning: a guess about which rate belongs to
-which slab would be the same failure with better syntax, so a flattened grid is still rejected.
-
-The page keeps whatever HTML/pipe table and prose the model also produced; when nothing tabular
-survives, the page crop goes in instead, so the reader always has the original to read.
+early. `A["CAPITAL ASSET<br>[Section 2(14)]"]` is valid and reads identically. The repair only
+ever adds quotes; it never drops or rewrites a character.
 
 Pure text in, text out — no LLM, no I/O, no frappe imports.
 """
@@ -30,8 +40,9 @@ from __future__ import annotations
 import re
 from itertools import pairwise
 
-# We only ever ask for flowcharts. Any other diagram type is out of contract, so it has not been
-# validated and must not be stored.
+# We only ever ask for flowcharts, and the flattened-grid signature is defined in terms of nodes
+# and edges. Any other diagram type simply isn't analysed here — it is not rejected for being
+# unfamiliar, which is the mistake this module used to make.
 _HEADER_RE = re.compile(r"^\s*(?:flowchart|graph)\s+(?:TD|TB|BT|LR|RL)\s*$", re.IGNORECASE)
 _MERMAID_BLOCK_RE = re.compile(
 	r"^[ \t]*```[ \t]*mermaid[ \t]*\n(.*?)^[ \t]*```[ \t]*$", re.MULTILINE | re.DOTALL
@@ -200,48 +211,6 @@ def parse_flowchart(source: str) -> tuple[dict[str, str], list[tuple[str, str]],
 	return labels, edges, broken
 
 
-def syntax_errors(labels: dict[str, str], edges: list[tuple[str, str]], broken: list[str]) -> list[str]:
-	"""Everything that would stop a parsed block rendering. Empty means it is safe."""
-	errors: list[str] = []
-	if broken:
-		errors.append(f"unparseable statement: {broken[0][:60]!r}")
-	for node_id, label in labels.items():
-		if label.count('"') % 2:
-			errors.append(f"unbalanced quotes in node {node_id}")
-		if "\\n" in label:
-			errors.append(f"literal \\n in node {node_id} — mermaid needs <br>")
-	if not edges:
-		errors.append("no edges — a flowchart with no connections carries no structure")
-		return errors
-	fragments = components(labels, edges)
-	if len(fragments) > 1:
-		errors.append(f"disconnected: {len(fragments)} unlinked fragments")
-	return errors
-
-
-def components(labels: dict[str, str], edges: list[tuple[str, str]]) -> list[set[str]]:
-	"""Connected components of the (undirected) node graph."""
-	neighbours: dict[str, set[str]] = {node: set() for node in labels}
-	for source_node, target in edges:
-		neighbours.setdefault(source_node, set()).add(target)
-		neighbours.setdefault(target, set()).add(source_node)
-	seen: set[str] = set()
-	found: list[set[str]] = []
-	for node in neighbours:
-		if node in seen:
-			continue
-		group = {node}
-		frontier = [node]
-		while frontier:
-			current = frontier.pop()
-			for neighbour in neighbours[current] - group:
-				group.add(neighbour)
-				frontier.append(neighbour)
-		seen |= group
-		found.append(group)
-	return found
-
-
 def tabular_signals(labels: dict[str, str], edges: list[tuple[str, str]]) -> list[str]:
 	"""Signs this "flowchart" is really a grid whose row↔value binding has been lost."""
 	if not edges:
@@ -283,21 +252,24 @@ def tabular_signals(labels: dict[str, str], edges: list[tuple[str, str]]) -> lis
 	return signals
 
 
-def diagram_errors(source: str) -> list[str]:
-	"""Every reason this mermaid block must not be stored.
+def grid_errors(source: str) -> list[str]:
+	"""Every reason this mermaid block must not be stored — all of them about meaning.
 
-	Parsed once for both verdicts: `remediate_pdf` runs this gate over every candidate of
-	every page, so a source that parsed itself twice per verdict cost up to nine parses a page.
+	Empty, and for anything that is not a flowchart, because the flattened-grid signature is
+	defined in terms of nodes and edges. Statements this cannot read contribute no nodes and
+	no edges rather than condemning the block: the reader's parser is the authority on syntax.
+
+	Parsed once per verdict — `remediate_pdf` runs this gate over every candidate of every
+	page, so a source that parsed itself twice cost up to nine parses a page.
 	"""
 	body = (source or "").strip()
 	if not body:
 		return ["empty diagram"]
-	header = body.splitlines()[0]
-	if not _HEADER_RE.match(header):
-		return [f"unsupported diagram type: {header.strip()[:40]!r}"]
+	if not _HEADER_RE.match(body.splitlines()[0]):
+		return []
 
-	labels, edges, broken = parse_flowchart(body)
-	return syntax_errors(labels, edges, broken) + tabular_signals(labels, edges)
+	labels, edges, _unreadable = parse_flowchart(body)
+	return tabular_signals(labels, edges)
 
 
 def has_table(markdown: str) -> bool:
@@ -322,16 +294,18 @@ def remove_unverified_diagrams(markdown: str, fallback_image_url: str = "") -> t
 	def replace(match: re.Match) -> str:
 		nonlocal rejected
 		source = match.group(1)
-		errors = diagram_errors(source)
-		if not errors:
-			return match.group(0)
+		# Repair first and unconditionally: it is lossless, so there is nothing to weigh, and
+		# deciding whether it was *needed* would mean judging syntax again.
 		repaired = quote_node_labels(source)
-		if repaired != source and not diagram_errors(repaired):
+		errors = grid_errors(repaired)
+		if errors:
+			rejected += 1
+			notes.append(f"mermaid rejected: {errors[0]}")
+			return ""
+		if repaired != source:
 			notes.append("mermaid repaired: node labels quoted")
 			return match.group(0).replace(source, repaired, 1)
-		rejected += 1
-		notes.append(f"mermaid rejected: {errors[0]}")
-		return ""
+		return match.group(0)
 
 	cleaned = _MERMAID_BLOCK_RE.sub(replace, text)
 	if rejected:
