@@ -36,14 +36,15 @@ from wikify.rag.search import Hit
 G1_EXPECTED_SOURCES = 15
 G1_NAIVE_LIMIT = 8
 
-# The demoed headline and golden question G1 ask the same thing in different words, and a
-# vector search is sensitive to exactly that: the demo phrasing ("...across all the
-# documents") puts 6 job descriptions in the naive top-8, G1's phrasing ("...across all
-# the PDFs") puts 5. Both are asserted, separately and by their own wording — averaging them
-# or asserting one number for both would hide a real ranking change behind a rounded mean.
+# The demoed headline and golden question G1 ask the same thing in different words. They used
+# to score differently — the demo phrasing ("...across all the documents") put 6 job
+# descriptions in the naive top-8 and G1's ("...across all the PDFs") put 5 — and on the
+# re-sectioned corpus both put 6. Naive got BETTER here, which narrows the gap the POC argues
+# but is not a regression: routed still returns all 15. They stay asserted separately, by
+# their own wording, so that a future divergence is visible rather than averaged away.
 HEADLINE_QUERY = "give me all the job descriptions across all the documents"
 HEADLINE_NAIVE_CORRECT = 6
-G1_NAIVE_CORRECT = 5
+G1_NAIVE_CORRECT = 6
 
 # Naive top-8 returns 8 sections whichever way the question is worded, so whatever it does not
 # get right is a miss against the full 15.
