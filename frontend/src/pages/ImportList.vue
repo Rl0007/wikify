@@ -1,8 +1,10 @@
 <script setup>
-import { onMounted, onUnmounted } from "vue";
+import { onMounted, onUnmounted, ref } from "vue";
 import { useRouter } from "vue-router";
-import { Badge, Button, Progress, Skeleton, useList } from "frappe-ui";
+import { Badge, Button, Progress, Skeleton, toast, useList } from "frappe-ui";
 import { useSocket } from "@/socket";
+import { usePdfUpload } from "@/composables/usePdfUpload";
+import UploadQueue from "@/components/UploadQueue.vue";
 import { statusTheme, isActive } from "@/utils/status";
 
 // Project-scoped imports list, embedded in ProjectDetail. The header + New Import
@@ -34,8 +36,61 @@ function onProgress(payload) {
 	}
 }
 
-onMounted(() => socket?.on("wikify_import_progress", onProgress));
-onUnmounted(() => socket?.off("wikify_import_progress", onProgress));
+// --- Drop zone: drop N PDFs anywhere on the list to import them in one go ------------
+const {
+	rows: uploadRows,
+	busy: uploadBusy,
+	error: uploadError,
+	addFiles,
+	removeRow,
+	upload,
+	uploadAndStart,
+} = usePdfUpload();
+// dragenter/dragleave fire per child element, so count them instead of toggling.
+const dragDepth = ref(0);
+
+function hasFiles(e) {
+	return Array.from(e.dataTransfer?.types || []).includes("Files");
+}
+
+function onDragEnter(e) {
+	if (!hasFiles(e)) return;
+	dragDepth.value += 1;
+}
+
+function onDragLeave() {
+	dragDepth.value = Math.max(0, dragDepth.value - 1);
+}
+
+async function onDrop(e) {
+	dragDepth.value = 0;
+	if (!hasFiles(e)) return;
+	if (!addFiles(e.dataTransfer.files)) return;
+	// The project comes from the route, so there's nothing to ask — upload and go.
+	const names = await uploadAndStart(props.project);
+	if (!names.length) {
+		if (uploadError.value) toast.error(uploadError.value);
+		return;
+	}
+	await imports.reload();
+	toast.success(names.length === 1 ? "1 document queued" : `${names.length} documents queued`);
+}
+
+// A near-miss drop would otherwise make the browser navigate away from the SPA.
+function swallowDrop(e) {
+	e.preventDefault();
+}
+
+onMounted(() => {
+	socket?.on("wikify_import_progress", onProgress);
+	window.addEventListener("dragover", swallowDrop);
+	window.addEventListener("drop", swallowDrop);
+});
+onUnmounted(() => {
+	socket?.off("wikify_import_progress", onProgress);
+	window.removeEventListener("dragover", swallowDrop);
+	window.removeEventListener("drop", swallowDrop);
+});
 
 function openImport(name) {
 	router.push({ name: "ImportDetail", params: { name } });
@@ -53,7 +108,33 @@ function pageLabel(row) {
 </script>
 
 <template>
-	<div class="body-container pt-5 pb-40">
+	<div
+		class="body-container relative pt-5 pb-40"
+		@dragenter="onDragEnter"
+		@dragover.prevent
+		@dragleave="onDragLeave"
+		@drop.prevent="onDrop"
+	>
+		<!-- Drag overlay — pointer-events-none so dragleave still fires underneath -->
+		<div
+			v-if="dragDepth > 0"
+			class="pointer-events-none absolute inset-x-0 top-3 bottom-36 z-10 flex flex-col items-center justify-center gap-2 rounded-md border-2 border-dashed border-outline-gray-3 bg-surface-gray-1"
+		>
+			<span class="lucide-upload size-6 text-ink-gray-5" aria-hidden="true" />
+			<p class="text-base text-ink-gray-7">Drop PDFs to import</p>
+			<p class="text-sm text-ink-gray-5">Each becomes its own document</p>
+		</div>
+
+		<!-- In-flight uploads from a drop; imports take over as rows once queued -->
+		<UploadQueue
+			v-if="uploadRows.length"
+			:rows="uploadRows"
+			:removable="!uploadBusy"
+			class="mb-3"
+			@remove="removeRow"
+			@retry="upload()"
+		/>
+
 		<!-- Loading skeleton (first load only — reloads keep the rows) -->
 		<div
 			v-if="imports.loading && !imports.data"

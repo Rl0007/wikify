@@ -19,6 +19,8 @@ const route = useRoute();
 const { resolvedTheme, toggleTheme, initializeTheme } = useTheme();
 const isMobile = useIsMobile();
 
+const BUG_REPORT_URL = "https://github.com/bwhtech/wikify/issues/new";
+
 const settingsOpen = ref(false);
 const mobileMenuOpen = ref(false);
 // The agent panel is mounted once here so it's available on every screen (slice 12).
@@ -34,6 +36,11 @@ const menuItems = computed(() => [
 		label: resolvedTheme.value === "dark" ? "Light mode" : "Dark mode",
 		icon: resolvedTheme.value === "dark" ? "lucide-sun" : "lucide-moon",
 		onClick: toggleTheme,
+	},
+	{
+		label: "Report a bug",
+		icon: "lucide-bug",
+		onClick: () => window.open(BUG_REPORT_URL, "_blank", "noopener"),
 	},
 	{
 		label: "Log out",
