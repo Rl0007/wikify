@@ -19,6 +19,8 @@ lost (the failure mode is one redundant pass, never stale content).
 
 from __future__ import annotations
 
+from contextlib import contextmanager
+
 import frappe
 from frappe.utils.data import cint
 
@@ -109,19 +111,44 @@ def rebuild_pending_project(project: str) -> None:
 	frappe.db.commit()
 
 
-def queue_page_propagation(doc, method: str | None = None) -> None:
-	"""`Source Page` doc_event handler — coalesce a section rebuild onto the long queue."""
+def page_content_changed(page_name: str) -> None:
+	"""Mark a page's downstream sections stale — called from `engine.store`, the write funnel.
+
+	This was a `Source Page.on_update` doc_event until 0.7, which meant it almost never
+	ran: every real write to `canonical_markdown` goes through `store.set_canonical` or
+	`store.set_canonical_markdown`, and those use `frappe.db.set_value`, which fires no
+	doc_event at all. The hook only ever saw the handful of ORM saves in the tests that
+	covered it. Hanging invalidation off the funnel that actually performs the write is
+	the same reasoning `reindex_sections` already applies to `Source Section`.
+	"""
 	if indexing_suspended():
 		return
-	# A page created just now was never copied into a section, so nothing downstream of it
-	# can be stale; `has_value_changed` reads any insert as a change, hence the explicit skip.
-	if doc.get_doc_before_save() is None:
+	page = frappe.db.get_value("Source Page", page_name, ["source_document", "page_no"], as_dict=True)
+	# A page with no document has no section tree above it to invalidate.
+	if not page or not page.source_document:
 		return
-	if not doc.has_value_changed("canonical_markdown"):
-		return
+	mark_pages_dirty(page.source_document, [cint(page.page_no)])
+	# The pass reads the page back from the database, so it must not start before the
+	# write that triggered it is committed.
+	queue_page_propagation_pass(page.source_document, after_commit=True)
 
-	mark_pages_dirty(doc.source_document, [cint(doc.page_no)])
-	queue_page_propagation_pass(doc.source_document, after_commit=True)
+
+@contextmanager
+def suspended_indexing():
+	"""Hold off per-page invalidation for a bulk pass that rebuilds the tree itself.
+
+	`remediate_pdf` and `finalize_document` write every page and then call
+	`rebuild_and_classify`, which replaces the whole tree and queues one project rebuild.
+	Invalidating page by page inside them would queue a second, redundant pass over work
+	that is about to be thrown away. Restored rather than cleared, so an outer bulk
+	context keeps its own suspension.
+	"""
+	was_suspended = frappe.flags.wikify_skip_reindex
+	frappe.flags.wikify_skip_reindex = True
+	try:
+		yield
+	finally:
+		frappe.flags.wikify_skip_reindex = was_suspended
 
 
 def mark_pages_dirty(source_document: str, pages: list[int]) -> None:

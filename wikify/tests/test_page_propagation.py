@@ -6,10 +6,14 @@
 `Source Section.markdown` is a *copy* of its pages' canonical markdown, so re-remediating
 a page used to leave every section built from it — and every chunk indexed from those
 sections — serving the old text until somebody re-sectioned the whole document by hand.
-These cover the doc_event that closes it: change detection, per-document coalescing (so a
-bulk write queues one job, not one per page), the rebuild itself, the explicit re-index
-(`rebuild_section_markdown` writes via `frappe.db.set_value`, which fires no doc_event),
-and the requeue when a pass dies half-done.
+These cover the invalidation that closes it, driven where the writes actually happen —
+`engine.store`. It hung off a `Source Page.on_update` doc_event until 0.7 and therefore
+almost never ran, because every real write is a `frappe.db.set_value`. So these go through
+`store`, not `doc.save()`: a test that saves the document proves the hook works on a path
+production does not take. Covered here: invalidation on both canonical writers,
+per-document coalescing (a bulk write queues one job, not one per page), suspension inside
+a pass that rebuilds the tree itself, the rebuild, the explicit re-index, and the requeue
+when a pass dies half-done.
 """
 
 from contextlib import contextmanager
@@ -20,18 +24,33 @@ from frappe.tests.utils import FrappeTestCase
 
 from wikify.engine import store
 from wikify.engine.loader.sectionizer import Section
+from wikify.engine.verify.harness import PageScore
 from wikify.rag import events
 from wikify.tests import _cleanup
 
 
 @contextmanager
-def doc_events_live():
-	"""Let the handler run: `indexing_suspended()` gates out `in_test` by design."""
+def invalidation_live():
+	"""Let invalidation run: `indexing_suspended()` gates out `in_test` by design."""
 	frappe.flags.in_test = False
 	try:
 		yield
 	finally:
 		frappe.flags.in_test = True
+
+
+def _score(composite: float) -> PageScore:
+	"""A scored page, for the write that must NOT invalidate anything downstream."""
+	return PageScore(
+		page_no=1,
+		text_recall=composite,
+		extra_ratio=0.0,
+		table_score=None,
+		judge_score=None,
+		composite=composite,
+		verdict="pass",
+		notes=[],
+	)
 
 
 def add_page(source_document: str, page_no: int, canonical: str) -> str:
@@ -85,12 +104,10 @@ class TestPagePropagation(FrappeTestCase):
 		return frappe.db.get_value("Source Section", self.section_named(title), "markdown")
 
 	def save_canonical(self, page_no: int, markdown: str) -> None:
-		page = frappe.get_doc("Source Page", self.pages[page_no])
-		page.canonical_markdown = markdown
-		page.save(ignore_permissions=True)
+		store.set_canonical_markdown(self.pages[page_no], markdown)
 
 	def test_a_changed_page_marks_itself_dirty_and_queues_one_pass(self):
-		with doc_events_live(), patch("frappe.enqueue") as enqueue:
+		with invalidation_live(), patch("frappe.enqueue") as enqueue:
 			self.save_canonical(1, "canonical page 1 — surcharge slabs repaired")
 
 		self.assertEqual(enqueue.call_args.args[0], "wikify.rag.events.propagate_dirty_pages")
@@ -98,28 +115,46 @@ class TestPagePropagation(FrappeTestCase):
 		self.assertEqual(enqueue.call_args.kwargs["queue"], "long")
 		self.assertEqual(events.take_dirty_pages(self.source_document.name), [1])
 
-	def test_a_save_that_leaves_canonical_markdown_alone_queues_nothing(self):
-		with doc_events_live(), patch("frappe.enqueue") as enqueue:
-			page = frappe.get_doc("Source Page", self.pages[1])
-			page.kind = "mixed"
-			page.save(ignore_permissions=True)
+	def test_adopting_a_remediation_invalidates_the_page_it_rewrote(self):
+		"""`set_canonical` is how remediation lands, and it is a `frappe.db.set_value` —
+		the doc_event this replaced never saw it, so a re-remediated page stayed stale."""
+		with invalidation_live(), patch("frappe.enqueue") as enqueue:
+			store.set_canonical(self.pages[2], "canonical page 2 — repaired", 0.94, "vlm")
+
+		self.assertEqual(enqueue.call_args.args[0], "wikify.rag.events.propagate_dirty_pages")
+		self.assertEqual(events.take_dirty_pages(self.source_document.name), [2])
+
+	def test_a_write_that_leaves_canonical_markdown_alone_queues_nothing(self):
+		with invalidation_live(), patch("frappe.enqueue") as enqueue:
+			store.set_page_scores(self.pages[1], _score(0.91))
 
 		enqueue.assert_not_called()
 		self.assertEqual(events.take_dirty_pages(self.source_document.name), [])
 
 	def test_a_bulk_page_write_queues_one_pass_not_one_job_per_page(self):
 		"""A parse writes hundreds of pages; one job each would bury the long queue."""
-		with doc_events_live(), patch("frappe.enqueue") as enqueue:
+		with invalidation_live(), patch("frappe.enqueue") as enqueue:
 			for page_no in range(1, 5):
 				self.save_canonical(page_no, f"canonical page {page_no} — rewritten")
-			# The same page saved repeatedly still costs one pass, and one rebuild.
+			# The same page written repeatedly still costs one pass, and one rebuild.
 			self.save_canonical(1, "canonical page 1 — rewritten twice")
 
 		self.assertEqual(enqueue.call_count, 1)
 		self.assertEqual(events.take_dirty_pages(self.source_document.name), [1, 2, 3, 4])
 
+	def test_a_pass_that_rebuilds_the_tree_itself_suspends_page_invalidation(self):
+		"""remediate/finalize write every page and then replace the tree wholesale; a
+		per-page pass over work that is about to be thrown away is pure waste."""
+		with invalidation_live(), patch("frappe.enqueue") as enqueue:
+			with events.suspended_indexing():
+				for page_no in range(1, 5):
+					self.save_canonical(page_no, f"canonical page {page_no} — bulk")
+
+		enqueue.assert_not_called()
+		self.assertEqual(events.take_dirty_pages(self.source_document.name), [])
+
 	def test_a_new_page_queues_nothing_because_no_section_copied_it_yet(self):
-		with doc_events_live(), patch("frappe.enqueue") as enqueue:
+		with invalidation_live(), patch("frappe.enqueue") as enqueue:
 			add_page(self.source_document.name, 5, "canonical page 5")
 
 		enqueue.assert_not_called()
@@ -180,7 +215,7 @@ class TestPagePropagation(FrappeTestCase):
 		# local cache — the exact split that stranded a 30-page bulk write.
 		cache.unlink(cache.make_key(key))
 
-		with doc_events_live(), patch("frappe.enqueue") as enqueue:
+		with invalidation_live(), patch("frappe.enqueue") as enqueue:
 			self.save_canonical(1, "canonical page 1 — after the worker finished")
 
 		self.assertEqual(enqueue.call_args.args[0], "wikify.rag.events.propagate_dirty_pages")

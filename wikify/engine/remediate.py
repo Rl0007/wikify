@@ -38,6 +38,7 @@ from wikify.engine.parsers import vlm
 from wikify.engine.sectionize import rebuild_and_classify
 from wikify.engine.verify import deterministic as det
 from wikify.engine.verify import score_page
+from wikify.rag import events
 
 # Two floors under adoption. A page had `# TIE TIT Molo` — ten characters of OCR noise — made
 # canonical at composite 0.058, because cleanup's own eligibility test only asks whether recall
@@ -248,9 +249,12 @@ def remediate_pdf(
 
 	# Stitch cross-page tables over the canonical set, then persist canonical per page.
 	stitched = dict(stitch_cross_page_tables([(p["page_no"], canon_md[p["page_no"]]) for p in pages]))
-	for p in pages:
-		pno = p["page_no"]
-		store.set_canonical(p["name"], stitched[pno], canon_comp[pno], canon_src[pno])
+	# The tree is rebuilt wholesale a few lines down, so invalidating page by page here
+	# would queue a redundant propagation pass over work that is about to be replaced.
+	with events.suspended_indexing():
+		for p in pages:
+			pno = p["page_no"]
+			store.set_canonical(p["name"], stitched[pno], canon_comp[pno], canon_src[pno])
 
 	comps = [c for c in canon_comp.values() if c is not None]
 	canonical_mean = round(sum(comps) / len(comps), 3) if comps else None

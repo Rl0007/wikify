@@ -174,6 +174,7 @@ def set_canonical(page_name: str, markdown: str, composite: float | None, source
 		values["canonical_composite"] = composite
 		values["verdict"] = get_verdict(composite)
 	frappe.db.set_value("Source Page", page_name, values)
+	invalidate_page(page_name)
 
 
 def set_canonical_mean(source_document: str, mean: float | None) -> None:
@@ -200,8 +201,21 @@ def get_canonical_composites(source_document: str) -> list[float | None]:
 
 def set_canonical_markdown(page_name: str, markdown: str) -> None:
 	"""Overwrite a page's canonical markdown in place (furniture-strip finalize), leaving
-	its composite + provenance untouched."""
+	its provenance untouched."""
 	frappe.db.set_value("Source Page", page_name, "canonical_markdown", markdown)
+	invalidate_page(page_name)
+
+
+def invalidate_page(page_name: str) -> None:
+	"""Tell the retrieval layer a page's canonical markdown changed.
+
+	Every copy downstream of a page — its sections' markdown, and the chunks indexed from
+	them — is stale until it is rebuilt, and this seam is where the write happens.
+	Imported inside the call because `rag.events` reaches back into `engine.sectionize`.
+	"""
+	from wikify.rag import events
+
+	events.page_content_changed(page_name)
 
 
 def get_finalize_pages(source_document: str) -> list[dict]:

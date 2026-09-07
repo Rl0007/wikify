@@ -25,6 +25,7 @@ from collections.abc import Callable
 
 from wikify.engine import store
 from wikify.engine.loader.cleanup import clean_pages
+from wikify.rag import events
 
 
 def finalize_document(
@@ -53,15 +54,18 @@ def finalize_document(
 
 	pages_changed = 0
 	total = len(pages)
-	for i, pno in enumerate(sorted(cleaned)):
-		md = cleaned[pno]
-		# Persist only real changes, and never blank a page that had content (a deterministic
-		# strip can't lose more than the detected furniture, but this is a cheap backstop).
-		if md.strip() != original[pno].strip() and md.strip():
-			store.set_canonical_markdown(name_by_page[pno], md)
-			pages_changed += 1
-		if progress_cb:
-			progress_cb(i + 1, total)
+	# The tree is rebuilt wholesale below, so invalidating page by page here would queue a
+	# redundant propagation pass over work that is about to be replaced.
+	with events.suspended_indexing():
+		for i, pno in enumerate(sorted(cleaned)):
+			md = cleaned[pno]
+			# Persist only real changes, and never blank a page that had content (a deterministic
+			# strip can't lose more than the detected furniture, but this is a cheap backstop).
+			if md.strip() != original[pno].strip() and md.strip():
+				store.set_canonical_markdown(name_by_page[pno], md)
+				pages_changed += 1
+			if progress_cb:
+				progress_cb(i + 1, total)
 
 	# Rebuild the section tree over the now-furniture-free canonical markdown.
 	n_sections = rebuild_and_classify(source_document, pdf_path, stage_cb)

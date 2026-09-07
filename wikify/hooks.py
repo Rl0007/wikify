@@ -148,13 +148,11 @@ after_install = "wikify.install.after_install"
 
 # The content chain `Source Page.canonical_markdown → Source Section.markdown → chunks →
 # index` copies at every link, so a fix that stops at one link leaves the rest serving the
-# old text. Page edits propagate into the covering sections; section edits make the
-# project's index stale. Both handlers coalesce into one queued job so a bulk pass writing
-# hundreds of rows doesn't storm the long queue — see `wikify/rag/events.py`.
+# old text. A section edit makes the project's index stale, and that is a doc_event because
+# sections are written through the ORM. Page edits are NOT: they go through
+# `engine.store`'s `frappe.db.set_value` calls, which fire no doc_event, so page
+# invalidation hangs off that write funnel instead — see `wikify/rag/events.py`.
 doc_events = {
-	"Source Page": {
-		"on_update": "wikify.rag.events.queue_page_propagation",
-	},
 	"Source Section": {
 		"after_insert": "wikify.rag.events.queue_reindex",
 		"on_update": "wikify.rag.events.queue_reindex",
