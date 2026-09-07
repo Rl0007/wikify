@@ -548,7 +548,12 @@ onBeforeUnmount(removeCanvas);
 					A force graph needs room to read, so this screen lists the same sections by
 					type with their reference counts. Open it on a wider screen for the map.
 				</p>
-				<FormControl v-model="search" type="text" size="sm" placeholder="Search sections…" />
+				<FormControl
+					v-model="search"
+					type="text"
+					size="sm"
+					placeholder="Search sections…"
+				/>
 				<FormControl
 					v-if="showDocFilter"
 					v-model="focusDoc"
@@ -611,7 +616,10 @@ onBeforeUnmount(removeCanvas);
 						>
 					</button>
 				</div>
-				<p v-if="!listCount && !graph.loading" class="py-10 text-center text-sm text-ink-gray-5">
+				<p
+					v-if="!listCount && !graph.loading"
+					class="py-10 text-center text-sm text-ink-gray-5"
+				>
 					No sections match these filters.
 				</p>
 			</div>

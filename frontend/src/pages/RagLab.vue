@@ -59,8 +59,8 @@ const missedKeys = computed(() =>
 		: new Set(
 				routed.value
 					.filter((hit) => !naiveSections.value.has(sectionKey(hit)))
-					.map(sectionKey),
-			),
+					.map(sectionKey)
+		  )
 );
 const hasComparison = computed(() => Boolean(comparedQuery.value));
 
@@ -93,7 +93,7 @@ const missedDocuments = computed(() => {
 	const seen = new Set(naive.value.map((hit) => hit.source_document));
 	return countDistinct(
 		routed.value.filter((hit) => !seen.has(hit.source_document)),
-		"source_document",
+		"source_document"
 	);
 });
 </script>

@@ -35,10 +35,10 @@ const projects = useList({
 // default is never archivable, so it always shows).
 const showArchived = ref(false);
 const visibleProjects = computed(() =>
-	(projects.data || []).filter((p) => showArchived.value || p.status !== "Archived"),
+	(projects.data || []).filter((p) => showArchived.value || p.status !== "Archived")
 );
 const archivedCount = computed(
-	() => (projects.data || []).filter((p) => p.status === "Archived").length,
+	() => (projects.data || []).filter((p) => p.status === "Archived").length
 );
 
 const showNew = ref(false);

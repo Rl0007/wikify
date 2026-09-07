@@ -322,7 +322,9 @@ onUnmounted(() => {
 							:class="row.is_group ? 'lucide-folder' : 'lucide-file-text'"
 							aria-hidden="true"
 						/>
-						<span class="min-w-0 truncate text-sm text-ink-gray-8">{{ row.title }}</span>
+						<span class="min-w-0 truncate text-sm text-ink-gray-8">{{
+							row.title
+						}}</span>
 						<Badge
 							v-if="row.lint_count"
 							:label="`⚠ ${row.lint_count}`"

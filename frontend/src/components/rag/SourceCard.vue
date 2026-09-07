@@ -27,7 +27,7 @@ const snippet = computed(() =>
 		.replace(/^\s*\|?[\s:|-]{6,}\|?\s*$/gm, "")
 		.replace(/[ \t]*\|[ \t]*/g, " · ")
 		.replace(/(?:\s*·\s*){2,}/g, " · ")
-		.trim(),
+		.trim()
 );
 
 // The backend zero-fills the provenance block on a citation it never quoted, so 0 means
@@ -117,8 +117,8 @@ const wikiHref = computed(() => {
 			highlighted
 				? 'border-outline-blue-3 bg-surface-blue-2'
 				: missed
-					? 'border-outline-amber-3 border-l-4 bg-surface-amber-2'
-					: 'border-outline-gray-2 bg-surface-elevation-1',
+				? 'border-outline-amber-3 border-l-4 bg-surface-amber-2'
+				: 'border-outline-gray-2 bg-surface-elevation-1',
 		]"
 	>
 		<span
@@ -127,8 +127,8 @@ const wikiHref = computed(() => {
 				highlighted
 					? 'bg-surface-gray-9 text-ink-gray-1'
 					: missed
-						? 'border border-outline-amber-3 bg-surface-amber-2 text-ink-gray-9'
-						: 'bg-surface-gray-3 text-ink-gray-7'
+					? 'border border-outline-amber-3 bg-surface-amber-2 text-ink-gray-9'
+					: 'bg-surface-gray-3 text-ink-gray-7'
 			"
 		>
 			{{ index }}

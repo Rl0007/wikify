@@ -44,16 +44,16 @@ const BASES = {
 
 const basis = computed(() => BASES[props.basis] || BASES.hybrid);
 const unranked = computed(
-	() => props.basis === "exhaustive" || props.unrankedSet || props.rank == null,
+	() => props.basis === "exhaustive" || props.unrankedSet || props.rank == null
 );
 // Only the vector leg produces a value on a real 0-1 axis, so only it earns a bar.
 const showSimilarity = computed(
-	() => props.basis === "vector" && !unranked.value && props.score != null,
+	() => props.basis === "vector" && !unranked.value && props.score != null
 );
 const hint = computed(() =>
 	props.score == null || unranked.value
 		? basis.value.hint
-		: `${basis.value.hint} Raw score ${props.score.toFixed(4)}.`,
+		: `${basis.value.hint} Raw score ${props.score.toFixed(4)}.`
 );
 </script>
 

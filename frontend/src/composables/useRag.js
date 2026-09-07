@@ -67,7 +67,7 @@ export function useProjectOptions() {
 			(rows) => {
 				if (rows?.length) lastProjectRows.value = rows;
 			},
-			{ immediate: true },
+			{ immediate: true }
 		);
 	}
 	return projectOptions;
@@ -97,7 +97,7 @@ const sessionId = ref(null);
 // failure alone — empty "Sources 0 / No answer" panels would claim a search happened and
 // came back empty.
 const failed = computed(
-	() => Boolean(errorText.value) && !sources.value.length && !answerText.value,
+	() => Boolean(errorText.value) && !sources.value.length && !answerText.value
 );
 
 // The request itself is module state too, and for a stronger reason than the results:

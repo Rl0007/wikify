@@ -24,7 +24,7 @@ const showSessionTotal = computed(
 	() =>
 		typeof props.sessionCost === "number" &&
 		Number.isFinite(props.sessionCost) &&
-		props.sessionCost > (props.cost || 0),
+		props.sessionCost > (props.cost || 0)
 );
 </script>
 

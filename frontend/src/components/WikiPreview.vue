@@ -145,7 +145,10 @@ function onBodyClick(e) {
 
 			<div class="min-h-0 flex-1 overflow-auto">
 				<!-- Rendered wiki page frame -->
-				<article v-if="mode === 'rendered'" class="mx-auto max-w-3xl px-4 py-5 sm:px-6 sm:py-6">
+				<article
+					v-if="mode === 'rendered'"
+					class="mx-auto max-w-3xl px-4 py-5 sm:px-6 sm:py-6"
+				>
 					<h1 class="mb-4 text-xl-semibold text-ink-gray-9">
 						{{ data.title }}
 					</h1>

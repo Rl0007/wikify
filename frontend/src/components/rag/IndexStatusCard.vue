@@ -23,7 +23,7 @@ const metrics = computed(() => [
 ]);
 
 const indexedAt = computed(() =>
-	props.status?.indexed_at ? dayjs(props.status.indexed_at).format("D MMM YYYY, h:mm a") : "",
+	props.status?.indexed_at ? dayjs(props.status.indexed_at).format("D MMM YYYY, h:mm a") : ""
 );
 </script>
 

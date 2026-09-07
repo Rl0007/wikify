@@ -50,7 +50,7 @@ onBeforeUnmount(() => window.removeEventListener("resize", fitToViewport));
 const windowStyle = computed(() =>
 	isPhone.value
 		? {}
-		: { left: `${geo.x}px`, top: `${geo.y}px`, width: `${geo.w}px`, height: `${geo.h}px` },
+		: { left: `${geo.x}px`, top: `${geo.y}px`, width: `${geo.w}px`, height: `${geo.h}px` }
 );
 
 const minimized = ref(false);
@@ -145,14 +145,14 @@ async function refreshSessions() {
 
 // Model picker — populated from get_agent_models when the panel first opens.
 const modelOptions = computed(() =>
-	(models.value || []).map((m) => ({ label: shortModel(m), onClick: () => (model.value = m) })),
+	(models.value || []).map((m) => ({ label: shortModel(m), onClick: () => (model.value = m) }))
 );
 watch(
 	() => props.open,
 	(open) => {
 		if (open) chat.loadModels();
 	},
-	{ immediate: true },
+	{ immediate: true }
 );
 
 // Rename dialog.

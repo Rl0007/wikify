@@ -34,12 +34,12 @@ const highlightedSource = ref(0);
 const basis = computed(() => relevanceBasis(route.value));
 const sourcesUnranked = computed(() => isUnrankedSet(sources.value));
 const documentCount = computed(
-	() => new Set(sources.value.map((hit) => hit.source_document).filter(Boolean)).size,
+	() => new Set(sources.value.map((hit) => hit.source_document).filter(Boolean)).size
 );
 const hasResult = computed(() => Boolean(askedQuestion.value) && !failed.value);
 const hasStreamedContent = computed(() => Boolean(sources.value.length || answerText.value));
 const elapsed = computed(() =>
-	tookMs.value >= 1000 ? `${(tookMs.value / 1000).toFixed(1)} s` : `${tookMs.value} ms`,
+	tookMs.value >= 1000 ? `${(tookMs.value / 1000).toFixed(1)} s` : `${tookMs.value} ms`
 );
 
 // The answer streams a token at a time, and every delta would otherwise re-parse the whole
@@ -72,7 +72,7 @@ function addCitationChips(rendered) {
 	return rendered.replace(
 		/\[(\d+)\]/g,
 		(match, number) =>
-			`<button type="button" class="rag-citation" data-citation="${number}">${number}</button>`,
+			`<button type="button" class="rag-citation" data-citation="${number}">${number}</button>`
 	);
 }
 

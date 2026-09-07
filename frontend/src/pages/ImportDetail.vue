@@ -65,7 +65,7 @@ watch(
 	(key) => {
 		const i = tabKeys.indexOf(key);
 		if (i >= 0 && i !== activeTab.value) activeTab.value = i;
-	},
+	}
 );
 
 // Streaming log
@@ -91,7 +91,7 @@ watch(
 		if (sd) setDocument({ name: sd, label: imp.doc?.import_title || props.name }, projectChip);
 		else if (projectChip) setProject(projectChip);
 	},
-	{ immediate: true },
+	{ immediate: true }
 );
 
 const pageReview = ref(null);
@@ -107,7 +107,7 @@ const sdStats = useList({
 });
 const sourceStats = computed(() => sdStats.data?.[0] || null);
 const docAudit = computed(
-	() => sourceStats.value?.canonical_mean ?? sourceStats.value?.mean_score,
+	() => sourceStats.value?.canonical_mean ?? sourceStats.value?.mean_score
 );
 function fmtCost(v) {
 	return v ? `$${Number(v).toFixed(4)}` : "—";
@@ -214,9 +214,11 @@ const levelColor = { info: "text-ink-gray-7", warn: "text-ink-amber-6", error: "
 					size="sm"
 					class="w-16 shrink-0 sm:w-40"
 				/>
-				<span v-if="isActive(status)" class="hidden truncate text-sm text-ink-gray-5 lg:block">{{
-					imp.doc?.stage_label
-				}}</span>
+				<span
+					v-if="isActive(status)"
+					class="hidden truncate text-sm text-ink-gray-5 lg:block"
+					>{{ imp.doc?.stage_label }}</span
+				>
 			</div>
 
 			<div class="flex shrink-0 items-center gap-2 pl-2">
@@ -317,12 +319,18 @@ const levelColor = { info: "text-ink-gray-7", warn: "text-ink-amber-6", error: "
 				</div>
 
 				<!-- Pages -->
-				<div v-else-if="tab.key === 'pages'" class="h-[calc(100dvh-9.5rem)] sm:h-[calc(100vh-7rem)]">
+				<div
+					v-else-if="tab.key === 'pages'"
+					class="h-[calc(100dvh-9.5rem)] sm:h-[calc(100vh-7rem)]"
+				>
 					<PageReview ref="pageReview" :source-document="imp.doc?.source_document" />
 				</div>
 
 				<!-- Tree -->
-				<div v-else-if="tab.key === 'tree'" class="h-[calc(100dvh-9.5rem)] sm:h-[calc(100vh-7rem)]">
+				<div
+					v-else-if="tab.key === 'tree'"
+					class="h-[calc(100dvh-9.5rem)] sm:h-[calc(100vh-7rem)]"
+				>
 					<SectionTree
 						ref="sectionTree"
 						:source-document="imp.doc?.source_document"
@@ -335,12 +343,18 @@ const levelColor = { info: "text-ink-gray-7", warn: "text-ink-amber-6", error: "
 				</div>
 
 				<!-- Explore -->
-				<div v-else-if="tab.key === 'explore'" class="h-[calc(100dvh-9.5rem)] sm:h-[calc(100vh-7rem)]">
+				<div
+					v-else-if="tab.key === 'explore'"
+					class="h-[calc(100dvh-9.5rem)] sm:h-[calc(100vh-7rem)]"
+				>
 					<Explore :source-document="imp.doc?.source_document" :import-name="name" />
 				</div>
 
 				<!-- Wiki -->
-				<div v-else-if="tab.key === 'wiki'" class="h-[calc(100dvh-9.5rem)] sm:h-[calc(100vh-7rem)]">
+				<div
+					v-else-if="tab.key === 'wiki'"
+					class="h-[calc(100dvh-9.5rem)] sm:h-[calc(100vh-7rem)]"
+				>
 					<WikiGenerate
 						:source-document="imp.doc?.source_document"
 						:import-name="name"
