@@ -104,9 +104,16 @@ def ask(
 	question: str,
 	project: str | None = None,
 	session: str | None = None,
+	stream: str | None = None,
 	rerank: bool = True,
 ) -> dict:
 	"""Answer a question from the wiki, with citations, streaming as it goes.
+
+	`stream` and `session` are different things and are not interchangeable. `stream` is a
+	caller-minted correlation token, echoed on every realtime payload so one tab can pick
+	its own deltas off a per-user channel; the server never stores it. `session` is a
+	`Wikify Ask Session` docname — absent on the first ask of a conversation, and returned
+	so the caller can send it back to make the next question a follow-up.
 
 	Realtime on `wikify_rag_answer` mirrors the agent loop's ordering: the route lands
 	first (the interface shows *why* this retrieval strategy), then the sources, then the
@@ -123,7 +130,7 @@ def ask(
 	started = time.monotonic()
 
 	def publish(payload: dict) -> None:
-		frappe.publish_realtime(STREAM_EVENT, {"session": session, **payload}, user=user)
+		frappe.publish_realtime(STREAM_EVENT, {"stream": stream, **payload}, user=user)
 
 	result = rag_answer.answer(
 		question,

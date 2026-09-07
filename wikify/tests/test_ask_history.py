@@ -251,3 +251,36 @@ class TestAskHistoryApi(FrappeTestCase):
 
 		api_ask_history.delete_session(session)
 		self.assertFalse(frappe.db.exists("Wikify Ask Session", session))
+
+
+class TestAskHistorySessionIdentity(FrappeTestCase):
+	"""`stream` and `session` are different identifiers and must stay that way.
+
+	They shared one name until 0.7: the interface minted a per-ask correlation token and
+	sent it as the conversation docname. Every ask therefore opened a new conversation,
+	history never replayed, and `recent_turns` loaded a document that had never existed —
+	which raises for a normal user and is short-circuited for Administrator, so these run
+	as a normal user on purpose.
+	"""
+
+	def setUp(self):
+		self.other_user = make_user(OTHER_USER)
+		self.addCleanup(frappe.set_user, "Administrator")
+
+	def test_a_correlation_token_replays_as_no_history_for_a_normal_user(self):
+		frappe.set_user(self.other_user)
+		self.assertEqual(history.recent_turns("rag-1786000000000-a1b2c3"), [])
+
+	def test_an_unknown_session_replays_as_no_history_for_administrator_too(self):
+		self.assertEqual(history.recent_turns("ASK-2026-99999"), [])
+
+	def test_handing_the_returned_session_back_continues_one_conversation(self):
+		frappe.set_user(self.other_user)
+		first = history.record_turn(None, "Which roles are listed?", make_result("Five roles."))
+		second = history.record_turn(first, "And their pay bands?", make_result("Bands 3 to 7."))
+
+		self.assertEqual(second, first)
+		self.assertEqual(
+			[turn["content"] for turn in history.recent_turns(second)],
+			["Which roles are listed?", "Five roles.", "And their pay bands?", "Bands 3 to 7."],
+		)

@@ -5,11 +5,17 @@ import { computed, ref, watch } from "vue";
 import { useCall, useList } from "frappe-ui";
 import { useSocket } from "@/socket";
 
-// `ask` streams over one shared channel and tags every payload with the session it
+// `ask` streams over one shared channel and tags every payload with the stream it
 // belongs to, unlike the agent loop's per-session `wikify_agent_*:<sid>` events.
 const ANSWER_CHANNEL = "wikify_rag_answer";
 
-function newSessionId() {
+// Two different identifiers, deliberately named apart. `stream` is a correlation token
+// minted here per ask, so this tab can pick its own deltas off a per-user channel; it
+// means nothing to the server beyond echoing it back. `session` is a `Wikify Ask Session`
+// docname the server mints and we replay, which is what makes a follow-up a follow-up.
+// They shared one name until 0.7 — so every ask opened a new conversation, and the
+// permission check ran against a docname that had never existed.
+function newStreamId() {
 	return `rag-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
@@ -91,7 +97,17 @@ const errorText = ref("");
 const usage = ref(null);
 const sessionCost = ref(0);
 const streaming = ref(false);
-const sessionId = ref(null);
+const streamId = ref(null);
+// The conversation this tab is continuing. Null until the first answer names one, then
+// held across asks — clearing it would silently start a new conversation every question.
+const conversationId = ref(null);
+
+// A conversation is scoped to the project it was opened against, so switching projects
+// starts a new one — otherwise the next follow-up would be rewritten against turns about
+// documents the user is no longer looking at.
+watch(project, () => {
+	conversationId.value = null;
+});
 
 // True when the request failed and nothing was retrieved. The page must then show the
 // failure alone — empty "Sources 0 / No answer" panels would claim a search happened and
@@ -114,8 +130,8 @@ const askCall = useCall({
 
 function handleAnswerEvent(payload) {
 	// Strict match: realtime is per-user, not per-tab, so another tab's (or another
-	// session's) answer would otherwise stream into this one.
-	if (!payload || payload.session !== sessionId.value) return;
+	// ask's) answer would otherwise stream into this one.
+	if (!payload || payload.stream !== streamId.value) return;
 	if (payload.route) route.value = payload.route;
 	if (payload.citations) sources.value = payload.citations;
 	if (payload.delta) answerText.value += payload.delta;
@@ -153,13 +169,14 @@ async function ask() {
 	if (!text || streaming.value) return;
 	reset();
 	askedQuestion.value = text;
-	sessionId.value = newSessionId();
+	streamId.value = newStreamId();
 	streaming.value = true;
 	try {
 		const response = await askCall.submit({
 			question: text,
 			project: project.value || null,
-			session: sessionId.value,
+			stream: streamId.value,
+			session: conversationId.value,
 		});
 		if (askCall.error) {
 			errorText.value = errorMessage(askCall.error);
@@ -171,6 +188,9 @@ async function ask() {
 		// Realtime is best-effort (no replay); the HTTP body is authoritative when
 		// no deltas arrived — e.g. socketio down, or the worker finished first.
 		if (!answerText.value) answerText.value = response.answer || "";
+		// The server owns the conversation's identity: it creates one on the first ask and
+		// returns the same name after. Recording it here is what replays history next turn.
+		if (response.session) conversationId.value = response.session;
 		refused.value = Boolean(response.refused);
 		tookMs.value = response.took_ms ?? null;
 		addUsage(response);

@@ -203,8 +203,14 @@ def recent_turns(session: str | int | None) -> list[dict]:
 
 	A forged session id must not feed someone else's conversation into the router prompt,
 	so an unreadable one replays as no history rather than throwing a user's follow-up away.
+
+	The existence check has to come first: `has_permission` loads the document, so a name
+	that was never a conversation raises `DoesNotExistError` at the caller instead of
+	replaying empty. Administrator short-circuits the permission check and never saw it.
 	"""
-	if not session or not frappe.has_permission("Wikify Ask Session", doc=session):
+	if not session or not frappe.db.exists("Wikify Ask Session", session):
+		return []
+	if not frappe.has_permission("Wikify Ask Session", doc=session):
 		return []
 	messages = frappe.get_all(
 		"Wikify Ask Message",
