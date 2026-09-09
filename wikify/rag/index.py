@@ -20,11 +20,6 @@ def chunk_rows(chunks: list[chunk.Chunk]) -> list[dict]:
 def refresh_fts_index(table) -> None:
 	# Rebuilt after every write because an FTS index only covers the rows present when it was
 	# built; searching then falls back to a flat scan for the rest, which scores differently.
-	# ponytail: full rebuild per write is fine at POC corpus size; move to an incremental
-	# `optimize()` once a project exceeds ~100k chunks.
-	# ponytail: two rebuilds racing overwrite each other's index, so the loser's rows stay
-	# FTS-invisible until the next write; serialise on a per-table lock once more than one
-	# project can be rebuilt at a time.
 	from lancedb.index import FTS
 
 	if not table.count_rows():
@@ -33,8 +28,6 @@ def refresh_fts_index(table) -> None:
 
 
 def requeue_rebuild(project: str) -> None:
-	# ponytail: no backoff and no attempt cap, so a project that fails deterministically
-	# re-queues forever; add a retry counter if a rebuild ever fails non-transiently.
 	from wikify.rag import events
 
 	frappe.cache().set_value(events.pending_key(project), "1", expires_in_sec=events.PENDING_TTL_SECONDS)

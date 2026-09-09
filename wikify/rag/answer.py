@@ -25,8 +25,6 @@ MIN_VECTOR_SCORE = 0.36
 # below-floor rerank refuses only when the embedding leg agrees, and a strong embedding
 # match overrules it. Measured on potion-base-8M: answerable questions peak 0.56-0.63
 # (ICAI) and 0.60 (demo), unanswerable 0.39-0.45 (ICAI) and 0.44 (demo).
-# ponytail: all three floors are calibrated against potion-base-8M on the demo + ICAI
-# corpora; recheck from the eval harness if the embedder or corpus changes.
 STRONG_VECTOR_SCORE = 0.5
 
 REFUSAL = (
@@ -141,8 +139,6 @@ def format_context(hits: list) -> str:
 	# 11,002 -> 3,783 tokens and $0.078 -> $0.035 per ask, but dropped the 37% surcharge rate
 	# out of G1 and took verified citations 12 -> 7. Synthesis is decode-bound (80% of wall
 	# clock at ~52 tok/s), so the prompt was never buying speed — only money.
-	# ponytail: revisit only behind a figure-recall gate over a table-heavy question set, and
-	# size the window from the citation quotes rather than a flat character budget.
 	blocks = []
 	for position, hit in enumerate(hits, start=1):
 		header = f"[{position}] {rag_search.crumb(hit)} ({rag_search.page_label(hit)})"

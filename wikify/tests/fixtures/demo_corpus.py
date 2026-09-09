@@ -12,8 +12,6 @@ Built as Source Document + Source Section rows directly rather than through the 
 pipeline: no source PDFs for this domain exist in the repo, and a real parse is an
 LLM call per page. The bodies below are hand-written prose standing in for parser output.
 
-# ponytail: hand-authored corpus, replace with a real parsed PDF set once demo PDFs exist
-
 Usage (from the bench root):
 
     bench --site wikify.localhost execute wikify.tests.fixtures.demo_corpus.seed_demo_corpus

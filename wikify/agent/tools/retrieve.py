@@ -1,13 +1,4 @@
-"""Retrieval tool — gives the agent loop genuine multi-hop search.
-
-`semantic_search` returns ranked excerpts *with their section ids*, so the model can chain
-search → `read_section` → search again without any loop changes. The handler calls the
-whitelisted `api.rag.search`, which is where routing and the permission pre-filter already
-live; the tool re-implements nothing.
-
-Routing is off here on purpose: the model is doing the routing, so it passes
-`section_type` / `mode` itself and we don't pay for a second classifier call per hop.
-"""
+"""Retrieval tool — gives the agent loop genuine multi-hop search."""
 
 from __future__ import annotations
 

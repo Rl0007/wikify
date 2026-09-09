@@ -14,9 +14,6 @@ DIRTY_PAGES_HASH = "wikify_rag_dirty_pages"
 # Past this many sections in one pass, one project rebuild beats a scoped `upsert_sections`:
 # the batch re-embeds every section it touches anyway, so at some width re-embedding the whole
 # project costs the same and leaves the index consistent in one commit instead of two.
-# ponytail: coalescing rebuilds the WHOLE project, so a one-word title fix re-embeds every
-# chunk in it; switch to per-section `upsert_section` once a rebuild stops fitting in the
-# long queue's timeout.
 PROJECT_REBUILD_FANOUT = 10
 
 

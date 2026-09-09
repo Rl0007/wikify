@@ -24,9 +24,6 @@ PAGE_TIE_MARGIN = 0.10
 # anywhere near this.
 MIN_QUOTE_SCORE = 0.82
 QUOTE_WINDOW_SLACK = 6
-# ponytail: a quote anchored on a token that occurs thousands of times scans that many
-# windows; capped rather than solved. Build a suffix automaton if quotes ever get long
-# enough that the rarest token is still common.
 MAX_ANCHOR_CANDIDATES = 200
 
 # Written as escapes so ruff's ambiguous-unicode rule can stay on for the rest of the app —
@@ -56,9 +53,6 @@ TOKEN_PATTERN = re.compile(r"[0-9a-z]+")
 # any token carrying a digit (rates, "87a", "115bac", the "2"/"31" of "section 2(31)"),
 # percent signs, accounting signs ("(+)", "(-)", "-5"), the "/" of "u/s", and comparison
 # operators.
-# ponytail: a sign is only load-bearing next to a digit or inside parentheses, so a lone "-"
-# used as a dash stays free punctuation ("crore - 25%" must still match "crore | 25%");
-# tighten it if a corpus ever writes a signed figure with a space after the sign.
 # Escaped for the same reason as DASH_CHARS above: these are exactly what RUF001 flags.
 OPERATOR_CHARS = "%/=<>\u2264\u2265\u00d7\u00f7\u2260"
 FIGURE_PATTERN = re.compile(

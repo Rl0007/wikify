@@ -134,13 +134,6 @@ def _list_section_types(ctx: Ctx, args: dict) -> str:
 
 
 def search_terms(text: str) -> list[str]:
-	"""Lowercase alphanumeric tokens with a trailing plural `s` dropped.
-
-	Applied to BOTH sides of the comparison, so the way a user asks ("job descriptions")
-	still matches the way titles are stored ("Job Description — Staff Nurse").
-	"""
-	# ponytail: only the trailing-`s` plural is folded, reach for a real stemmer if
-	# `-ies`/`-es` mismatches start costing recall
 	terms = []
 	for token in _WORD_SEPARATOR.split((text or "").lower()):
 		if token:

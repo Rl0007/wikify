@@ -75,11 +75,6 @@ def running_header_titles(pages: list[tuple[int, str]]) -> set[str]:
 	page of its chapter, so the parser emits it as a fresh heading per page. Detected
 	structurally — same title heading pages, most of them within the first few non-blank
 	lines of the page — so no document-specific strings are needed.
-
-	# ponytail: repetition + top-of-page placement is the whole signal; a genuine heading
-	# that opens three or more short pages of its own (a glossary of one-term-per-page,
-	# say) would be misread as furniture — require the occurrences to carry no body of
-	# their own if such a corpus turns up.
 	"""
 	occurrences: dict[str, list[int]] = defaultdict(list)
 	pages_seen: dict[str, set[int]] = defaultdict(set)
