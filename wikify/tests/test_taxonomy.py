@@ -1,9 +1,3 @@
-# Copyright (c) 2026, BWH and contributors
-# For license information, please see license.txt
-
-"""0.4 slice 21 — Section Type labels are identity: duplicate (normalized) labels are
-rejected at insert, deduped in the creation API, and merged by the v0_4 patch."""
-
 import frappe
 from frappe.tests.utils import FrappeTestCase
 
@@ -38,7 +32,6 @@ class TestSectionTypeDedupe(FrappeTestCase):
 		self.assertEqual(res["type_name"], "zz_dedupe_a")
 
 	def test_merge_patch_collapses_duplicates_and_repoints_sections(self):
-		# db_insert bypasses validate — simulating rows that predate the constraint.
 		self._insert("zz_dedupe_canon", "Zz Dedupe Merge")
 		self._insert("t_zzdupe1", "zz dedupe merge", validate=False)
 
@@ -59,7 +52,7 @@ class TestSectionTypeDedupe(FrappeTestCase):
 		merge_patch()
 		self.assertFalse(frappe.db.exists("Section Type", "t_zzdupe1"))
 		self.assertEqual(frappe.db.get_value("Source Section", sec.name, "section_type"), "zz_dedupe_canon")
-		merge_patch()  # idempotent — nothing left to merge
+		merge_patch()
 		self.assertTrue(frappe.db.exists("Section Type", "zz_dedupe_canon"))
 
 	def test_find_by_normalized_label(self):

@@ -8,23 +8,14 @@ import frappe
 
 from wikify.rag import store
 
-# A day is a backstop, not the freshness mechanism — `index_version()` already retires an
-# entry the moment its corpus changes. This only stops abandoned keys accumulating in redis.
 TTL_SECONDS = 86400
 
-# `index_version` retires an entry when the CORPUS moves; this retires one when the code
-# reading it moves. Bump it whenever the synthesis prompt or a score floor in `rag.answer`
-# changes, or answers written by the old behaviour keep being served for a whole TTL.
 CACHE_VERSION = 1
 
 WHITESPACE = re.compile(r"\s+")
 
 
 def normalise(question: str) -> str:
-	# Exact matching, not a similarity threshold, and it must never become one: "surcharge
-	# rate for individuals" and "surcharge rate for companies" are near neighbours carrying
-	# DIFFERENT statutory rates, and a near-miss returns a confidently wrong figure behind a
-	# real citation the evidence gate cannot catch, because the citation is genuine.
 	return WHITESPACE.sub(" ", (question or "").strip()).casefold()
 
 
@@ -37,10 +28,6 @@ def index_version() -> int | None:
 	return getattr(table, "version", 0) if table is not None else 0
 
 
-# Keyed on the ROUTED question. The raw question plus its conversation was unique to that
-# conversation, so nothing after a session's first turn could ever hit. `readable` is
-# load-bearing — it is the ACL pre-filter — and sorted, because the permission query's row
-# order is not guaranteed stable.
 def cache_key(
 	decided,
 	project: str | None,

@@ -1,15 +1,3 @@
-# Copyright (c) 2026, BWH and contributors
-# For license information, please see license.txt
-
-"""Adoption floors: a remediation may only become canonical if it is a better read of the page.
-
-Page 6 of the second ICAI referencer shipped `# TIE TIT Molo` — ten characters of OCR noise — as
-its canonical markdown at composite 0.058, over a VLM read of the same page. Cleanup's own
-eligibility test only asks whether recall regressed, and recall measured against an equally empty
-baseline had not, so the worst candidate on the page won by default. These tests hold the two
-floors that now sit under every method's rules.
-"""
-
 from __future__ import annotations
 
 import unittest
@@ -40,7 +28,6 @@ OCR_NOISE = "# TIE TIT Molo"
 
 class TestAdoptionFloors(unittest.TestCase):
 	def test_near_empty_candidate_never_beats_one_with_content(self):
-		"""The live regression: cleanup passed its recall test, and still must not be adopted."""
 		candidates = [candidate("vlm", GOOD_MARKDOWN, 0.82), candidate("cleanup", OCR_NOISE, 0.058)]
 		winner = pick_winner(candidates, baseline_composite=0.05, baseline_markdown="")
 		self.assertEqual(winner[0], "vlm")
@@ -59,7 +46,6 @@ class TestAdoptionFloors(unittest.TestCase):
 		self.assertIsNone(pick_winner(candidates, baseline_composite=0.88, baseline_markdown=GOOD_MARKDOWN))
 
 	def test_a_genuinely_blank_page_still_adopts_its_best_read(self):
-		"""Both floors are relative — they must not strand a page whose source really is bare."""
 		candidates = [candidate("cleanup", "# Notes", 0.62)]
 		winner = pick_winner(candidates, baseline_composite=0.20, baseline_markdown="")
 		self.assertEqual(winner[0], "cleanup")

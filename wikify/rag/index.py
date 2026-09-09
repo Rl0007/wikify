@@ -10,16 +10,11 @@ FTS_COLUMN = "text"
 
 
 def chunk_rows(chunks: list[chunk.Chunk]) -> list[dict]:
-	# The row shape lives next to the dataclass in `chunk.chunk_row`: LanceDB stores a missing
-	# declared column as null rather than raising, so a field added to the schema but forgotten
-	# there reads back empty on every chunk instead of failing loudly.
 	vectors = embed.embed([item.embed_text for item in chunks])
 	return [chunk.chunk_row(item, vector) for item, vector in zip(chunks, vectors, strict=True)]
 
 
 def refresh_fts_index(table) -> None:
-	# Rebuilt after every write because an FTS index only covers the rows present when it was
-	# built; searching then falls back to a flat scan for the rest, which scores differently.
 	from lancedb.index import FTS
 
 	if not table.count_rows():
@@ -36,9 +31,6 @@ def requeue_rebuild(project: str) -> None:
 
 def rebuild_project(project: str) -> dict:
 	started = time.monotonic()
-	# Embed before deleting anything: embedding is the slow step and the one most likely to
-	# die, and doing it first keeps the window where the project has no rows to two adjacent
-	# LanceDB commits instead of spanning the whole encode.
 	chunks = chunk.chunks_for_project(project)
 	table = store.chunks_table(create=True)
 	rows = chunk_rows(chunks) if chunks else []
@@ -58,9 +50,6 @@ def rebuild_project(project: str) -> dict:
 
 
 def upsert_sections(section_names: list[str]) -> int:
-	# One delete, one add and one FTS rebuild for the whole batch. Done per section, a
-	# ten-section propagation pass rebuilt the entire FTS index ten times and re-read every
-	# page of the document ten times over — the cost was in the fan-out, not the work.
 	names = [name for name in dict.fromkeys(section_names) if name]
 	if not names:
 		return 0

@@ -9,8 +9,6 @@ from wikify.rag import evidence
 
 CONTEXT_SEPARATOR = " \u203a "
 
-# The contextual-retrieval prefix (document title + hierarchy path) is embedded with each
-# chunk so a fragment carries where it came from — see `CONTEXT_SEPARATOR` and `embed_text`.
 CHUNK_TARGET_CHARS = 1200
 CHUNK_OVERLAP_CHARS = 150
 
@@ -41,16 +39,11 @@ class Chunk:
 	page_end: int
 	wiki_route: str | None
 	page_no: int = 0
-	# `page_no` is the page this chunk's text was actually matched back to; `page_approximate`
-	# says it is the range start because the match was ambiguous. The `line_*` pair indexes the
-	# parent section's markdown, `page_line_*` the resolved page's.
 	page_approximate: bool = True
 	line_start: int = 0
 	line_end: int = 0
 	page_line_start: int = 0
 	page_line_end: int = 0
-	# A breadcrumb section whose body lives in its children: indexed so exhaustive filter mode
-	# can still return it, and kept out of the similarity legs (see `search`).
 	title_only: bool = False
 
 

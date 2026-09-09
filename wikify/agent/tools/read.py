@@ -1,10 +1,3 @@
-"""Read / context tools — reuse the existing whitelisted `api/` read seams.
-
-Slice 12 shipped `read_tree`; slice 13 adds `read_section`, `read_page`,
-`list_section_types`, and `search_sections`. Handlers default `source_document` to the
-attached document (`ctx.default_document`) so the user rarely names ids.
-"""
-
 from __future__ import annotations
 
 import re
@@ -16,7 +9,6 @@ from frappe import _
 from wikify.agent.context import Ctx
 from wikify.agent.registry import Tool
 
-# Keep tool results bounded — the model can ask for a narrower slice if it needs more.
 _BODY_LIMIT = 6000
 _WORD_SEPARATOR = re.compile(r"[^a-z0-9]+")
 
@@ -27,7 +19,6 @@ def _truncate(text: str) -> str:
 
 
 def render_tree(source_document: str) -> str:
-	"""The Source Section tree as compact, indented text (shared with context.py)."""
 	from wikify.api.sections import get_tree
 
 	roots = get_tree(source_document)
@@ -53,7 +44,6 @@ def render_tree(source_document: str) -> str:
 
 
 def _read_tree(ctx: Ctx, args: dict) -> str:
-	"""Return the Source Section tree as compact, indented text."""
 	source_document = ctx.default_document(args.get("source_document"))
 	if not source_document:
 		return _(
@@ -64,7 +54,6 @@ def _read_tree(ctx: Ctx, args: dict) -> str:
 
 
 def _read_section(ctx: Ctx, args: dict) -> str:
-	"""A section's markdown + metadata."""
 	name = args.get("name")
 	if not name:
 		return _("Provide the section `name` (the id shown in <angle brackets> in the tree).")
@@ -92,7 +81,6 @@ def _read_section(ctx: Ctx, args: dict) -> str:
 
 
 def _read_page(ctx: Ctx, args: dict) -> str:
-	"""A page's canonical markdown + verdict + scores."""
 	source_document = ctx.default_document(args.get("source_document"))
 	page_no = args.get("page_no")
 	if not source_document:
@@ -118,7 +106,6 @@ def _read_page(ctx: Ctx, args: dict) -> str:
 
 
 def _list_section_types(ctx: Ctx, args: dict) -> str:
-	"""The taxonomy (Section Types: name, label, description, color)."""
 	types = frappe.get_all(
 		"Section Type",
 		fields=["type_name", "label", "description", "color", "is_other"],
@@ -142,7 +129,6 @@ def search_terms(text: str) -> list[str]:
 
 
 def matches_terms(section: dict, terms: list[str]) -> bool:
-	"""True when every query term appears in the section's path/title (normalised)."""
 	haystack = " ".join(search_terms(f"{section.get('hierarchy_path') or ''} {section.get('title') or ''}"))
 	return all(term in haystack for term in terms)
 
@@ -166,12 +152,6 @@ def describe_scope(project: str | None, source_document: str | None) -> str:
 
 
 def unknown_type_hint(section_type: str) -> str:
-	"""Message for a `section_type` that is not in the taxonomy, with the near matches.
-
-	Distinguishing this from "the type exists but is empty" is the whole point: a model
-	that guesses `job_description` must learn the key is wrong, not that the content is
-	missing.
-	"""
 	known = frappe.get_all("Section Type", fields=["type_name", "label", "description"])
 	terms = search_terms(section_type)
 	scored = []
@@ -197,17 +177,6 @@ def unknown_type_hint(section_type: str) -> str:
 
 
 def _search_sections(ctx: Ctx, args: dict) -> str:
-	"""Explore-style cross-document lookup, reusing `api.explore.sections_by_type`.
-
-	With `section_type`, returns the matching sections grouped by document (optionally
-	scoped to `project` / the attached `source_document`). Without a type, lists the
-	taxonomy counts so the model can pick a type to drill into.
-
-	`query` is a NARROWING HINT, not a hard filter: when it matches nothing the full set
-	is returned with a note. The tool's contract is "find me the sections" — silently
-	returning nothing because the user's wording differs from the stored titles reads to
-	the model as "that type is empty" and it then states that as fact.
-	"""
 	from wikify.api.explore import UNTAGGED, sections_by_type, type_summary
 
 	section_type = args.get("section_type")
@@ -269,13 +238,6 @@ def _search_sections(ctx: Ctx, args: dict) -> str:
 
 
 def _read_rendered_preview(ctx: Ctx, args: dict) -> str:
-	"""What the user's wiki preview actually renders for a section (0.3 Slice 17).
-
-	Reuses `api.wiki.render_section_preview` — the same content pipeline (empty-group
-	rollup + page-ref resolution) the preview and wiki generation use. This is the
-	verification tool after any content mutation: it reads the layer the user sees,
-	not the layer that was just written.
-	"""
 	from wikify.api.wiki import render_section_preview
 
 	name = args.get("name")
@@ -295,8 +257,6 @@ def _read_rendered_preview(ctx: Ctx, args: dict) -> str:
 
 
 def _read_wiki_page(ctx: Ctx, args: dict) -> str:
-	"""The GENERATED Wiki Document content for a section (0.3 Slice 19) — detects drift
-	between the section (preview) and the live wiki page."""
 	name = args.get("name")
 	if not name:
 		return _("Provide the section `name`.")
@@ -328,7 +288,6 @@ TOOLS = [
 	Tool(
 		name="read_tree",
 		side="server",
-		# adjacent literals are one wrapped sentence, not a missing comma
 		# nosemgrep
 		description=(
 			"Read the Source Section tree (titles, section types, page ranges, hierarchy, "
@@ -379,7 +338,6 @@ TOOLS = [
 	Tool(
 		name="read_rendered_preview",
 		side="server",
-		# adjacent literals are one wrapped sentence, not a missing comma
 		# nosemgrep
 		description=(
 			"Read what the user's wiki preview renders for a section — the content after "
@@ -398,7 +356,6 @@ TOOLS = [
 	Tool(
 		name="read_wiki_page",
 		side="server",
-		# adjacent literals are one wrapped sentence, not a missing comma
 		# nosemgrep
 		description=(
 			"Read the GENERATED wiki page (Wiki Document) for a section, with a staleness note "
@@ -424,7 +381,6 @@ TOOLS = [
 	Tool(
 		name="search_sections",
 		side="server",
-		# adjacent literals are one wrapped sentence, not a missing comma
 		# nosemgrep
 		description=(
 			"Find sections across documents by Section Type (Explore-style). Optionally scope "

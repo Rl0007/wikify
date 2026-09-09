@@ -1,23 +1,3 @@
-"""Repeatable demo corpus for the RAG POC.
-
-Five healthcare-provider manuals whose sections deliberately **overlap in type**: each
-document carries three job descriptions, a compensation/benefits section, a
-qualifications-and-training section, an organisation overview, and one domain section.
-Fifteen `staff_roles_and_responsibilities` sections spread over five documents is the
-whole point — a naive top-k (k=8) vector search physically cannot return them all, while
-a `section_type` metadata filter returns exactly fifteen. That is the completeness thesis
-the POC demonstrates.
-
-Built as Source Document + Source Section rows directly rather than through the parse
-pipeline: no source PDFs for this domain exist in the repo, and a real parse is an
-LLM call per page. The bodies below are hand-written prose standing in for parser output.
-
-Usage (from the bench root):
-
-    bench --site wikify.localhost execute wikify.tests.fixtures.demo_corpus.seed_demo_corpus
-    bench --site wikify.localhost execute wikify.tests.fixtures.demo_corpus.inventory
-"""
-
 from __future__ import annotations
 
 import frappe
@@ -1045,9 +1025,6 @@ request from the person or a worker. Every review records what changed, what sta
 same, and who agreed it.
 """
 
-# Each section is (title, level, hierarchy_path, page_start, page_end, section_type, markdown).
-# Groups carry no body and no type: the wiki generator gives them a Contents rollup, and
-# leaving them untyped keeps a `section_type` filter returning exactly the leaf sections.
 
 GROUP = None
 
@@ -1427,7 +1404,6 @@ DOCUMENTS: list[dict] = [
 
 
 def build_sections(spec: dict) -> list[Section]:
-	"""Turn a document spec's tuples into the `Section` objects `store.replace_sections` eats."""
 	return [
 		Section(
 			title=title,
@@ -1443,7 +1419,6 @@ def build_sections(spec: dict) -> list[Section]:
 
 
 def get_or_create_project() -> str:
-	"""Get-or-create the demo project, keyed on `project_name`. Returns its name."""
 	existing = frappe.db.get_value("Wikify Project", {"project_name": PROJECT_NAME}, "name")
 	if existing:
 		return existing
@@ -1461,7 +1436,6 @@ def get_or_create_project() -> str:
 
 
 def get_or_create_space() -> str:
-	"""Get-or-create the demo Wiki Space, keyed on its route. Returns its name."""
 	existing = frappe.db.get_value("Wiki Space", {"route": SPACE_ROUTE}, "name")
 	if existing:
 		return existing
@@ -1474,7 +1448,6 @@ def get_or_create_space() -> str:
 
 
 def get_or_create_document(spec: dict, project: str) -> str:
-	"""Get-or-create a Source Document by title within the demo project."""
 	existing = frappe.db.get_value("Source Document", {"title": spec["title"], "project": project}, "name")
 	if existing:
 		frappe.db.set_value("Source Document", existing, "page_count", spec["page_count"])
@@ -1485,8 +1458,6 @@ def get_or_create_document(spec: dict, project: str) -> str:
 
 
 def sections_match(source_document: str, sections: list[Section]) -> bool:
-	"""True when the stored tree already equals the spec — lets a re-run skip the rebuild
-	(which would otherwise drop and recreate every wiki page)."""
 	stored = frappe.get_all(
 		"Source Section",
 		filters={"source_document": source_document},
@@ -1509,8 +1480,6 @@ def sections_match(source_document: str, sections: list[Section]) -> bool:
 
 
 def prune_stale_documents(project: str) -> list[str]:
-	"""Drop demo-project documents no longer in the spec (a retitled document would
-	otherwise be left behind as a duplicate), taking their wiki subtree with them."""
 	wanted = {spec["title"] for spec in DOCUMENTS}
 	stale = [
 		row
@@ -1521,7 +1490,6 @@ def prune_stale_documents(project: str) -> list[str]:
 	]
 	for row in stale:
 		if row.wiki_root_group and frappe.db.exists("Wiki Document", row.wiki_root_group):
-			# NestedSet needs leaves gone first, hence deepest (largest lft) first.
 			descendants = get_descendants_of("Wiki Document", row.wiki_root_group, ignore_permissions=True)
 			for name in frappe.get_all(
 				"Wiki Document", filters={"name": ["in", descendants]}, order_by="lft desc", pluck="name"
@@ -1534,12 +1502,6 @@ def prune_stale_documents(project: str) -> list[str]:
 
 
 def seed_demo_corpus() -> dict:
-	"""Create (or refresh) the five-document demo corpus and project it into a Wiki Space.
-
-	Idempotent: documents are matched by title within the demo project, the section tree is
-	rebuilt only when it drifts from the spec, and wiki generation upserts pages against
-	each section's `wiki_document`. Returns the inventory.
-	"""
 	seed_section_types()
 	project = get_or_create_project()
 	space = get_or_create_space()
@@ -1552,15 +1514,12 @@ def seed_demo_corpus() -> dict:
 			store.replace_sections(source_document, sections)
 		generate_wiki(source_document, wiki_space=space)
 
-	# test setup must be visible to the worker connection
 	# nosemgrep
 	frappe.db.commit()
 	return inventory()
 
 
 def section_routes() -> list[dict]:
-	"""(document, section, section_type, wiki route) for every demo section — the raw
-	material for the golden-question expected-source lists."""
 	project = frappe.db.get_value("Wikify Project", {"project_name": PROJECT_NAME}, "name")
 	documents = frappe.get_all(
 		"Source Document", filters={"project": project}, fields=["name", "title"], order_by="title asc"
@@ -1604,7 +1563,6 @@ def section_routes() -> list[dict]:
 
 
 def inventory() -> dict:
-	"""Print and return the corpus counts — the evidence the demo data is really there."""
 	project = frappe.db.get_value("Wikify Project", {"project_name": PROJECT_NAME}, "name")
 	documents = frappe.get_all(
 		"Source Document",

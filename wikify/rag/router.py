@@ -1,24 +1,3 @@
-"""Query routing — the core thesis of POC-2 made executable.
-
-*"Give me all the job descriptions"* is a **completeness** question: the right answer is a
-metadata filter on `Source Section.section_type` that returns every match, not a top-k
-similarity guess that silently under-recalls. This module decides, per question, which of
-the three retrieval legs to use:
-
-- `exhaustive` — filter on a section type, return **all** matches.
-- `semantic`   — fuzzy "something about Y", hybrid top-k.
-- `hybrid`     — a type filter *and* similarity ranking inside it.
-
-It also rewrites conversational follow-ups ("what about the second one?") into a
-standalone query, because retrieval has no memory — only the rewritten query is embedded.
-
-The classification runs on the cheap `classifier_model` through `engine.llm.chat_completion`
-— the same JSON-mode client the reranker uses, so routing shows up in the per-call cost
-metrics. When no key is configured (or the model misbehaves) routing falls back
-deterministically to `hybrid`: the union leg is never wrong, only less pointed, so
-retrieval must never hard-fail on the router.
-"""
-
 from __future__ import annotations
 
 import json
@@ -29,14 +8,8 @@ import frappe
 from wikify.engine import llm, settings
 from wikify.rag import usage
 
-# The router only ever sees a short tail of the conversation — enough to resolve "it" /
-# "the second one", not enough to blow up the cheap model's context.
 HISTORY_TURNS = 6
 
-# Routing is the first thing an Ask does and nothing else can start until it lands, so the
-# tail matters more than the median. OpenRouter's default price-weighted routing re-draws a
-# provider per call; pinning the one endpoint is what removes the draw. Same preference the
-# reranker uses (`search.RERANK_PROVIDER`), for the same reason.
 PROVIDER = {"order": ["google-ai-studio"], "allow_fallbacks": True}
 
 FALLBACK_REASON = "Routing is unavailable, so I searched both by meaning and by section type."
@@ -44,11 +17,9 @@ FALLBACK_REASON = "Routing is unavailable, so I searched both by meaning and by 
 
 @dataclass
 class Route:
-	"""A routing decision. `reason` is rendered in the UI — write it for a human."""
-
-	intent: str  # "exhaustive" | "semantic" | "hybrid"
+	intent: str
 	section_type: str | None
-	query: str  # rewritten, standalone
+	query: str
 	reason: str
 
 	def as_dict(self) -> dict:
@@ -114,7 +85,6 @@ Reply with ONLY a JSON object:
 
 
 def taxonomy_lines() -> list[dict]:
-	"""The Section Type taxonomy the router is allowed to choose from."""
 	return frappe.get_all(
 		"Section Type",
 		fields=["type_name", "label", "description"],
@@ -149,7 +119,6 @@ def build_messages(question: str, project: str | None, history: list | None) -> 
 
 
 def parse_decision(content: str) -> dict:
-	"""Read the model's JSON reply, tolerating a ```json fence or surrounding prose."""
 	text = (content or "").strip()
 	if text.startswith("```"):
 		text = text.split("```")[1]
@@ -168,11 +137,6 @@ def fallback(question: str, reason: str = FALLBACK_REASON) -> Route:
 
 
 def route(question: str, project: str | None = None, history: list | None = None) -> Route:
-	"""Classify intent + rewrite the question into a standalone query.
-
-	Never raises: any failure (no key, model down, unparseable reply, invented section
-	type) degrades to the `hybrid` union leg with an honest reason.
-	"""
 	question = (question or "").strip()
 	if not question:
 		return fallback(question, "There was no question to route.")
@@ -202,11 +166,8 @@ def route(question: str, project: str | None = None, history: list | None = None
 		return fallback(question)
 
 	section_type = (decision.get("section_type") or "").strip() or None
-	# A hallucinated type would filter the corpus down to nothing, so an unknown type
-	# drops the filter rather than the results.
 	if section_type and not frappe.db.exists("Section Type", section_type):
 		section_type = None
-	# Both filtered legs are meaningless without a type to filter on.
 	if intent in ("exhaustive", "hybrid") and not section_type:
 		intent = "semantic"
 

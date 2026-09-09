@@ -47,7 +47,6 @@ TOOLS = [
 	Tool(
 		name="semantic_search",
 		side="server",
-		# adjacent literals are one wrapped sentence, not a missing comma
 		# nosemgrep
 		description=(
 			"Search the indexed wiki content by meaning and by keyword, returning ranked "

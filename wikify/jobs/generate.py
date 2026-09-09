@@ -1,11 +1,3 @@
-"""Generate-wiki job (Slice 7) — project the approved Source Section tree into a Wiki
-Space, streaming progress, then land the Import in `Completed`.
-
-Mirrors the parse/remediate jobs: flip status to `Generating Wiki`, run the two-pass
-`generate_wiki` engine entrypoint, persist the chosen space on both the Import and the
-Source Document, and stream a final line with a link to the generated space.
-"""
-
 from __future__ import annotations
 
 import frappe
@@ -54,8 +46,6 @@ def run(
 			f"→ /{result['space_route']}",
 			meta={"space": result["space"], "space_route": result["space_route"]},
 		)
-		# every import-progress broadcast in wikify/jobs is unscoped, not just this one; giving them
-		# 		# a room is a backend+SPA change, not a lint fix
 		# nosemgrep
 		frappe.publish_realtime(
 			"wikify_wiki_done",
@@ -63,7 +53,6 @@ def run(
 		)
 	except Exception:
 		error = frappe.get_traceback()
-		# Revert to Graphed (the approved tree is intact); surface the error.
 		imp.db_set("status", "Graphed")
 		imp.db_set("error", error)
 		frappe.db.commit()

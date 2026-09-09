@@ -1,24 +1,8 @@
-# Copyright (c) 2026, BWH and contributors
-# For license information, please see license.txt
-
-"""Span-level grounding (`wikify.rag.evidence`) + chunk provenance (`wikify.rag.chunk`).
-
-The load-bearing assertions:
-  - a located span reports line and character offsets into the ORIGINAL text, so the line
-    a student is told to check is the line that is actually there;
-  - a near-verbatim quote (smart quotes, en dash, rupee-sign vs Rs., re-flowed whitespace, dropped
-    bold markers) still resolves, and a FABRICATED quote does not — `verify_citations`
-    must call it unverified rather than pass it through;
-  - a chunk is pinned to the single page its text came from, and falls back to the section
-    page range flagged `page_approximate` when two pages are too close to call.
-"""
-
 import frappe
 from frappe.tests.utils import FrappeTestCase
 
 from wikify.rag import chunk, evidence
 
-# Two pages of a rate table, in the shape the ICAI corpus stores them.
 PAGE_10 = """## AMT
 
 Alternate minimum tax is not attracted where the adjusted total income of the
@@ -71,12 +55,6 @@ def citation(source_document: str = "DOC-1", **overrides) -> dict:
 
 
 def seed_pages() -> str:
-	"""A real Source Document carrying PAGE_10 / PAGE_11, rolled back with the test.
-
-	`verify_citations` resolves a quote down to a page by reading `Source Page` out of the
-	database, so the page leg is only exercised against real rows — a dict fixture would
-	prove the matcher works and the query doesn't.
-	"""
 	project = frappe.get_doc(
 		{"doctype": "Wikify Project", "project_name": f"Evidence Test {frappe.generate_hash(length=8)}"}
 	).insert(ignore_permissions=True)
@@ -121,7 +99,6 @@ class TestLocateQuote(FrappeTestCase):
 		self.assertTrue(located["found"])
 		self.assertEqual(located["score"], 1.0)
 		self.assertEqual(PAGE_11[located["char_start"] : located["char_end"]], quote)
-		# The reported line must BE the line: read it back out of the source.
 		lines = PAGE_11.split("\n")
 		self.assertEqual(located["line_start"], located["line_end"])
 		self.assertEqual(lines[located["line_start"] - 1], quote)
@@ -134,7 +111,6 @@ class TestLocateQuote(FrappeTestCase):
 		self.assertEqual((located["line_start"], located["line_end"]), (3, 4))
 
 	def test_near_verbatim_quote_still_resolves(self):
-		# Rupee sign for "Rs.", en dash, collapsed whitespace, bold markers gone.
 		located = evidence.locate_quote(
 			"Exceeding \u20b92 crore \u2013 25%", "| Exceeding **Rs. 2 crore** | 25% |"
 		)
@@ -158,22 +134,12 @@ class TestLocateQuote(FrappeTestCase):
 
 
 class TestFigureFidelity(FrappeTestCase):
-	"""Prose may drift; a figure may not.
-
-	Both cases here were found VERIFYING against the real ICAI page 6 before the figure gate
-	existed: fuzzy similarity is length-dependent, so a single wrong digit is a rounding error
-	to it and a statutory rate to a student.
-	"""
-
-	# The real line, ICAI SARANSH p.6, canonical_markdown line 30.
 	HEC_LINE = (
 		"*   HEC @4% on amount of income-tax (+) surcharge, if any OR (-) rebate u/s 87A, "
 		"if applicable, is levied."
 	)
 
 	def test_flipped_accounting_sign_is_not_verified(self):
-		# Scored 0.85 and verified before the gate: "(+)" and "(-)" carry no word tokens, so a
-		# token-similarity match cannot see the difference between adding and subtracting.
 		located = evidence.locate_quote(
 			self.HEC_LINE.replace("(+) surcharge", "(-) surcharge"), self.HEC_LINE
 		)
@@ -181,8 +147,6 @@ class TestFigureFidelity(FrappeTestCase):
 		self.assertEqual(located["reason"], evidence.FIGURES_DIFFER)
 
 	def test_one_wrong_digit_in_a_long_quote_is_not_verified(self):
-		# The dangerous direction: padding the quote raises the fuzzy ratio, so the longer the
-		# citation the better a wrong rate hides. Length must not buy credibility.
 		long_source = f"{PAGE_10}\n{self.HEC_LINE} " + "Marginal relief is available. " * 12
 		fabricated = f"{self.HEC_LINE} " + "Marginal relief is available. " * 12
 		fabricated = fabricated.replace("@4%", "@6%")
@@ -202,7 +166,6 @@ class TestFigureFidelity(FrappeTestCase):
 		self.assertEqual(located["reason"], evidence.FIGURES_DIFFER)
 
 	def test_the_true_line_still_verifies(self):
-		# The gate must not be a blanket refusal — the control for every rejection above.
 		located = evidence.locate_quote(
 			"HEC @4% on amount of income-tax (+) surcharge, if any OR (-) rebate u/s 87A", self.HEC_LINE
 		)
@@ -324,7 +287,6 @@ class TestChunkProvenance(FrappeTestCase):
 	def test_chunk_resolves_to_a_single_page_not_the_range(self):
 		chunks = self.build()
 		self.assertTrue(chunks)
-		# The whole section is one chunk here, and it is mostly page 11.
 		self.assertIn(chunks[0].page_no, (10, 11))
 		self.assertGreaterEqual(chunks[0].line_start, 1)
 		self.assertGreaterEqual(chunks[0].line_end, chunks[0].line_start)
@@ -350,8 +312,6 @@ class TestChunkProvenance(FrappeTestCase):
 		pieces = chunk.split_pieces(markdown)
 		self.assertGreater(len(pieces), 1)
 		self.assertEqual(chunk.split_markdown(markdown), chunk.add_overlap(pieces))
-		# Every un-overlapped piece is a contiguous run of the source, which is what makes
-		# its line span meaningful.
 		for piece in pieces:
 			self.assertTrue(evidence.locate_quote(piece, markdown)["found"])
 

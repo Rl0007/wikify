@@ -1,10 +1,3 @@
-# Copyright (c) 2026, BWH and contributors
-# For license information, please see license.txt
-
-"""Slice 12 — agent walking skeleton: the litellm tool-loop, the `read_tree` tool, message
-persistence, the concurrency guard, and cancel. litellm is mocked (no live model).
-"""
-
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -39,7 +32,6 @@ def _sec(title, level, path, p_start, p_end):
 
 
 def _system_text(content):
-	"""Flatten a system message's content (string, or cache-marked content-part list)."""
 	if isinstance(content, list):
 		return "".join(part.get("text", "") for part in content)
 	return content or ""
@@ -59,8 +51,6 @@ def _tool_chunk(index, call_id, name, arguments):
 
 
 class FakeLLM:
-	"""Replays canned streaming responses for successive `complete_with_tools` calls."""
-
 	def __init__(self, streams):
 		self.streams = list(streams)
 		self.calls = []
@@ -75,7 +65,6 @@ class TestAgent(FrappeTestCase):
 		self.sd = frappe.get_doc({"doctype": "Source Document", "title": "Agent Test"}).insert(
 			ignore_permissions=True
 		)
-		# The loop commits mid-turn, defeating rollback — raw-delete what we insert.
 		self.addCleanup(_cleanup.delete_document, self.sd.name)
 		_cleanup.register_session_sweep(self)
 		store.replace_sections(
@@ -86,8 +75,6 @@ class TestAgent(FrappeTestCase):
 				_sec("2. Beta", 1, ["2. Beta"], 3, 3),
 			],
 		)
-
-	# --- the read_tree tool ----------------------------------------------------------
 
 	def test_read_tree_renders_hierarchy(self):
 		ctx = Ctx(session="x", user="Administrator", source_document=self.sd.name)
@@ -101,8 +88,6 @@ class TestAgent(FrappeTestCase):
 		out = _read_tree(ctx, {})
 		self.assertIn("No document", out)
 
-	# --- the loop --------------------------------------------------------------------
-
 	def _make_session(self):
 		sess = session.get_or_create(
 			None, user="Administrator", scope="document", source_document=self.sd.name
@@ -112,7 +97,6 @@ class TestAgent(FrappeTestCase):
 		return sess
 
 	def test_loop_calls_tool_then_answers(self):
-		"""Round 1 streams a read_tree call; round 2 streams the final answer."""
 		sess = self._make_session()
 		fake = FakeLLM(
 			[
@@ -132,15 +116,12 @@ class TestAgent(FrappeTestCase):
 		roles = [m.role for m in msgs]
 		self.assertEqual(roles, ["user", "assistant", "tool", "assistant"])
 
-		# The assistant's first turn requested the tool; the tool ran read_tree.
 		self.assertIn("read_tree", msgs[1].tool_calls)
 		self.assertEqual(msgs[2].tool_name, "read_tree")
 		self.assertIn("Alpha", msgs[2].content)
-		# Final answer is the streamed text, accumulated.
 		self.assertEqual(msgs[3].content, "The tree has Alpha and Beta.")
 		self.assertEqual(msgs[3].status, "done")
 
-		# is_running cleared; the tool result was fed back to the model on round 2.
 		self.assertEqual(frappe.db.get_value("Wikify Agent Session", sess.name, "is_running"), 0)
 		self.assertEqual(len(fake.calls), 2)
 		self.assertEqual(fake.calls[1]["messages"][-1]["role"], "tool")
@@ -158,11 +139,6 @@ class TestAgent(FrappeTestCase):
 		self.assertTrue(any(e.startswith("wikify_agent_complete") for e in events))
 
 	def test_cancel_stops_mid_stream(self):
-		"""A cancel signalled mid-stream stops the loop without persisting an answer.
-
-		`run()` clears stale flags on entry, so cancel must arrive while streaming — here
-		the stream requests it as it yields the first chunk; the per-chunk check catches it.
-		"""
 		sess = self._make_session()
 
 		def cancelling_stream():
@@ -172,7 +148,6 @@ class TestAgent(FrappeTestCase):
 		fake = FakeLLM([cancelling_stream()])
 		with patch("wikify.agent.llm.complete_with_tools", fake):
 			AgentRunner(sess.name, "Administrator").run()
-		# No assistant answer persisted as done with that text.
 		answers = frappe.get_all(
 			"Wikify Agent Message",
 			filters={"session": sess.name, "role": "assistant"},
@@ -180,8 +155,6 @@ class TestAgent(FrappeTestCase):
 		)
 		self.assertNotIn("should not finish", answers)
 		self.assertFalse(frappe.cache().get_value(cancel_key(sess.name)))
-
-	# --- the API guard ---------------------------------------------------------------
 
 	def test_run_rejects_when_already_running(self):
 		sess = session.get_or_create(None, user="Administrator", scope="global")
@@ -197,8 +170,6 @@ class TestAgent(FrappeTestCase):
 		self.assertIn("message_id", result)
 		enq.assert_called_once()
 		self.assertEqual(frappe.db.get_value("Wikify Agent Session", result["session_id"], "is_running"), 1)
-
-	# --- slice 13: the extra read tools ----------------------------------------------
 
 	def _first_section(self):
 		return frappe.get_all(
@@ -227,10 +198,6 @@ class TestAgent(FrappeTestCase):
 		self.assertIn("Page 1", out)
 
 	def _make_type(self, **kwargs):
-		# Unique label too — Section Type labels are identity (0.4 slice 21), and a
-		# committed leak of a real-looking label ("Introduction") once polluted the dev
-		# taxonomy. Cleanup is registered because the agent loop commits mid-test,
-		# defeating the FrappeTestCase rollback.
 		tname = f"t_{frappe.generate_hash(length=6)}"
 		kwargs.setdefault("label", f"Test Type {tname}")
 		doc = frappe.get_doc({"doctype": "Section Type", "type_name": tname, **kwargs}).insert(
@@ -253,12 +220,9 @@ class TestAgent(FrappeTestCase):
 		self.assertIn(self.sd.name, out)
 
 	def test_explicit_bad_document_falls_back_to_attached(self):
-		"""A model echoing "Title (id)" instead of the bare id falls back to the attachment."""
 		ctx = Ctx(session="x", user="Administrator", source_document=self.sd.name)
 		out = _read_tree(ctx, {"source_document": f"Agent Test ({self.sd.name})"})
 		self.assertIn("1. Alpha", out)
-
-	# --- slice 13: attachment resolution ---------------------------------------------
 
 	def test_resolve_document_attachment_sets_scope_and_block(self):
 		resolved = resolve_attachments([{"type": "document", "name": self.sd.name}])
@@ -272,8 +236,6 @@ class TestAgent(FrappeTestCase):
 		self.assertIn("body of 1. Alpha", resolved.block)
 
 	def test_resolve_wiki_view_section_adds_framing_line(self):
-		"""A section attached from the Wiki tab (view=wiki) frames the block as a
-		rendered wiki page; a plain section attachment doesn't."""
 		name = self._first_section()
 		wiki = resolve_attachments([{"type": "section", "name": name, "view": "wiki"}])
 		self.assertIn("rendered wiki page", wiki.block)
@@ -298,7 +260,6 @@ class TestAgent(FrappeTestCase):
 		self.assertEqual(resolved.block, "")
 
 	def test_loop_prepends_attachment_block(self):
-		"""An attached document's tree outline reaches the model as a system message."""
 		sess = session.get_or_create(None, user="Administrator", scope="global")
 		session.append_message(sess.name, "user", "What's in this doc?", status="done")
 		session.set_running(sess.name, True)
@@ -307,12 +268,8 @@ class TestAgent(FrappeTestCase):
 			AgentRunner(
 				sess.name, "Administrator", attachments=[{"type": "document", "name": self.sd.name}]
 			).run()
-		# System content may be a plain string or a cache-marked [{text, cache_control}] list
-		# (Anthropic models) — flatten before asserting.
 		systems = [_system_text(m["content"]) for m in fake.calls[0]["messages"] if m["role"] == "system"]
 		self.assertTrue(any("1. Alpha" in s for s in systems))
-
-	# --- slice 13: session listing ---------------------------------------------------
 
 	def test_list_and_new_session(self):
 		created = agent_api.new_session(scope="document", source_document=self.sd.name)
@@ -323,14 +280,6 @@ class TestAgent(FrappeTestCase):
 
 
 class TestSearchSectionsRecall(FrappeTestCase):
-	"""`search_sections` must never let a `query` hint look like an empty section type.
-
-	Live regression: asked "How many job descriptions are in the Demo Corpus project?" the
-	agent reasoned its way to the right type, searched with query="job descriptions", got
-	"No sections of type X match", and told the user there were none — while 15 sections
-	sat under titles reading "Job Description — …".
-	"""
-
 	def setUp(self):
 		self.sd = frappe.get_doc({"doctype": "Source Document", "title": "Recall Test"}).insert(
 			ignore_permissions=True
@@ -365,7 +314,6 @@ class TestSearchSectionsRecall(FrappeTestCase):
 		doc = frappe.get_doc({"doctype": "Section Type", "type_name": type_name, **kwargs}).insert(
 			ignore_permissions=True
 		)
-		# The loop test commits mid-turn, so a plain delete would be rolled back with it.
 		self.addCleanup(_cleanup.delete_section_type, type_name)
 		return doc
 
@@ -373,7 +321,6 @@ class TestSearchSectionsRecall(FrappeTestCase):
 		return _search_sections(Ctx(session="x", user="Administrator"), args)
 
 	def test_plural_query_matches_singular_titles(self):
-		"""The exact failing shape: the user's plural wording vs singular stored titles."""
 		out = self._search(section_type=self.section_type.type_name, query="job descriptions")
 		self.assertIn("Ward Sister", out)
 		self.assertIn("Staff Nurse", out)
@@ -390,11 +337,9 @@ class TestSearchSectionsRecall(FrappeTestCase):
 		empty_type = self._make_type()
 		out = self._search(section_type=empty_type.type_name, source_document=self.sd.name)
 		self.assertIn("no sections in", out)
-		self.assertIn(self.section_type.type_name, out)  # names the types that do have content
+		self.assertIn(self.section_type.type_name, out)
 
 	def test_project_title_resolves_to_its_id(self):
-		"""The live failure: the user says "the Demo Corpus project" and the model passes
-		that title, which used to scope the query to zero documents."""
 		project = frappe.get_doc(
 			{"doctype": "Wikify Project", "project_name": f"Recall Corpus {frappe.generate_hash(length=6)}"}
 		).insert(ignore_permissions=True)
@@ -416,7 +361,6 @@ class TestSearchSectionsRecall(FrappeTestCase):
 		self.assertIn(self.section_type.type_name, out)
 
 	def test_agent_loop_sees_the_count_for_the_failing_question(self):
-		"""End to end through the loop: the tool message the model reads must carry the count."""
 		sess = session.get_or_create(None, user="Administrator", scope="global")
 		session.append_message(
 			sess.name, "user", "How many job descriptions are in this project?", status="done"

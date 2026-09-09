@@ -23,9 +23,6 @@ from wikify.rag.router import route as route_question
 STREAM_EVENT = "wikify_rag_answer"
 
 DEFAULT_LIMIT = 8
-# `limit` widens the candidate list, and with the reranker on every candidate is a 512-token
-# cross-encoder forward pass on the web worker inside the request. Unbounded, that is an
-# authenticated way to spend the whole box on one call.
 MAX_LIMIT = 100
 
 
@@ -94,10 +91,6 @@ def ask(
 
 	history = session_history(session)
 	readable = readable_projects()
-	# Routing is an LLM call, and it runs before retrieval can decide there is nothing to
-	# retrieve. `assert_readable` above cannot cover this: an unscoped ask has no project to
-	# check, so without this a user who may read no wiki at all still spends a classifier
-	# call — and a session row — on every question, only to be refused for want of hits.
 	if not project and not readable:
 		frappe.throw(_("You do not have access to any wiki."), frappe.PermissionError)
 	rerank_enabled = sbool(rerank)
@@ -109,9 +102,6 @@ def ask(
 		key = answer_cache.cache_key(
 			decided, project, rerank_enabled, readable, agent_llm.resolve_model(project=project)
 		)
-		# A refusal is never stored: it can come from a transient failure — a missing key, a
-		# reranker returning a flat verdict — rather than from a fact about the corpus, and a
-		# cached one would keep answering "I couldn't find this" for a day after the fix.
 		cached = answer_cache.get(key)
 		if cached:
 			result = replay_cached_answer(cached, publish, spend)
@@ -158,10 +148,6 @@ def ask(
 
 
 def replay_cached_answer(cached: dict, publish, spend: dict) -> dict:
-	# The interface renders the stream, not the return value, so a hit must publish the same
-	# payloads a live answer does. One delta, not a faked token stream: there is no generation
-	# to pace, and pacing it would spend the wall clock the cache exists to remove. `spend` is
-	# what THIS turn cost — the routing call — never the original's price and never zero.
 	publish({"citations": cached.get("citations") or []})
 	if cached.get("answer"):
 		publish({"delta": cached["answer"]})
