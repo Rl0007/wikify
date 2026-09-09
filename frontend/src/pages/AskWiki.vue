@@ -67,7 +67,7 @@ watch(
 	() => {
 		if (historyOpen.value) listSessions();
 	},
-	{ immediate: true },
+	{ immediate: true }
 );
 
 async function openSession(name) {
@@ -102,7 +102,7 @@ watch(
 	() => turns.value.map((turn) => turn.rendered.length + turn.sources.length).join(),
 	() => {
 		if (stickToBottom.value) scrollToLatest();
-	},
+	}
 );
 
 // A new turn is the reader's own doing — asking, or opening a conversation from the rail —
@@ -112,7 +112,7 @@ watch(
 	() => {
 		stickToBottom.value = true;
 		scrollToLatest();
-	},
+	}
 );
 
 // Openers for a reader who has nothing to type yet. They live inside the empty state, so
@@ -184,7 +184,7 @@ watch(
 			restoringSession.value = false;
 		}
 	},
-	{ immediate: true },
+	{ immediate: true }
 );
 </script>
 

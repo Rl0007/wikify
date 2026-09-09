@@ -101,7 +101,7 @@ export function useProjectOptions() {
 					project.value = "";
 				}
 			},
-			{ immediate: true },
+			{ immediate: true }
 		);
 	}
 	return projectOptions;
@@ -363,7 +363,7 @@ function applyStoredAnswer(turn, row) {
 				intent: row.route_intent,
 				section_type: row.route_section_type,
 				reason: row.route_reason,
-			}
+		  }
 		: null;
 	turn.usage =
 		typeof row.cost === "number"
@@ -372,7 +372,7 @@ function applyStoredAnswer(turn, row) {
 					promptTokens: row.prompt_tokens ?? null,
 					completionTokens: row.completion_tokens ?? null,
 					model: row.model || "",
-				}
+			  }
 			: null;
 }
 

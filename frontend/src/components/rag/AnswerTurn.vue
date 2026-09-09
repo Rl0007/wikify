@@ -23,7 +23,7 @@ const highlightedSource = ref(0);
 const basis = computed(() => relevanceBasis(props.turn.route));
 const sourcesUnranked = computed(() => isUnrankedSet(props.turn.sources));
 const documentCount = computed(
-	() => new Set(props.turn.sources.map((hit) => hit.source_document).filter(Boolean)).size,
+	() => new Set(props.turn.sources.map((hit) => hit.source_document).filter(Boolean)).size
 );
 const failed = computed(() => turnFailed(props.turn));
 const elapsed = computed(() => {
@@ -37,7 +37,7 @@ function addCitationChips(rendered) {
 	return rendered.replace(
 		/\[(\d+)\]/g,
 		(match, number) =>
-			`<button type="button" class="rag-citation" data-citation="${number}">${number}</button>`,
+			`<button type="button" class="rag-citation" data-citation="${number}">${number}</button>`
 	);
 }
 
