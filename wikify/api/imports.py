@@ -3,12 +3,27 @@
 from __future__ import annotations
 
 import frappe
+from frappe import _
 
 from wikify.engine import preview_wiki as _preview_wiki
 from wikify.seed import seed_uncategorized_project
 
 #: Guard against a runaway drag-and-drop — one worker chews through these serially.
 MAX_BATCH = 25
+
+
+def assert_readable_file(file_url: str) -> None:
+	"""Reject a `file_url` the caller has no right to read.
+
+	The url is written to `Wikify Import.pdf` verbatim and a worker parses whatever it
+	points at, so without this any user can name another user's private attachment and
+	have its contents re-published as wiki sections. Checked per row rather than through
+	`get_list`, because File's read rule lives in a `has_permission` hook that a query
+	filter never runs.
+	"""
+	names = frappe.get_all("File", filters={"file_url": file_url}, pluck="name")
+	if not any(frappe.has_permission("File", ptype="read", doc=name) for name in names):
+		frappe.throw(_("You are not allowed to import {0}.").format(file_url), frappe.PermissionError)
 
 
 def _create_import(pdf_file_url: str, title: str, project: str) -> str:
@@ -36,6 +51,7 @@ def start_import(pdf_file_url: str, title: str, project: str | None = None) -> s
 	`project` is the owning Wikify Project; it defaults to "Uncategorized" when omitted.
 	Returns the new Import's name so the SPA can route to its detail page.
 	"""
+	assert_readable_file(pdf_file_url)
 	return _create_import(pdf_file_url, title, project or seed_uncategorized_project())
 
 
@@ -56,6 +72,11 @@ def start_imports(files: list[dict] | str, project: str | None = None) -> list[s
 
 	if any(not f.get("file_url") for f in files):
 		frappe.throw("Every file needs a file_url.")
+
+	# Every url is checked before any Import is created, so a batch carrying one unreadable
+	# file enqueues nothing rather than half of itself.
+	for uploaded_file in files:
+		assert_readable_file(uploaded_file["file_url"])
 
 	# Resolve the default once — not once per file.
 	project = project or seed_uncategorized_project()
