@@ -88,8 +88,10 @@ const sections = computed(() => [{ label: "", items: destinations.value }]);
 
 // Full-height, multi-pane routes own their own scroll (graph canvas, split review,
 // tabbed import). Everything else scrolls as one page inside the shell's scroll area.
-const FIXED_HEIGHT_ROUTES = ["Explore", "ProjectGraph", "ImportGraph"];
+// Ask owns its scrolling: the transcript scrolls, the composer under it does not.
+const FIXED_HEIGHT_ROUTES = ["Explore", "ProjectGraph", "ImportGraph", "AskWiki"];
 const pageScroll = computed(() => !FIXED_HEIGHT_ROUTES.includes(route.name));
+const onAskPage = computed(() => route.name === "AskWiki");
 
 const collapsed = ref(localStorage.getItem("sidebar-collapsed") === "true");
 watch(collapsed, (v) => localStorage.setItem("sidebar-collapsed", v));
@@ -185,9 +187,11 @@ onMounted(initializeTheme);
 
 		<!-- Floating assistant button (desktop only — mobile uses the nav tab). It sits
 		     bottom-right, which on any screen narrower than desktop would sit on top of
-		     card actions like "Open in wiki"; the `!isMobile` guard is what keeps it clear. -->
+		     card actions like "Open in wiki"; the `!isMobile` guard is what keeps it clear.
+		     Ask hides it outright: it lands on that page's composer, and a second chat
+		     entry point beside a chat is a coin-flip over which one answers. -->
 		<Button
-			v-if="!isMobile"
+			v-if="!isMobile && !onAskPage"
 			v-show="!agentOpen"
 			variant="solid"
 			icon="lucide-sparkles"

@@ -2,6 +2,7 @@
 // One retrieved chunk, shown as provenance: where it came from in the document, why it
 // ranked (vector vs full-text rank), and a deep link into the generated wiki.
 import { computed } from "vue";
+import { RouterLink } from "vue-router";
 import RelevanceTag from "@/components/rag/RelevanceTag.vue";
 
 const props = defineProps({
@@ -13,7 +14,15 @@ const props = defineProps({
 	highlighted: { type: Boolean, default: false },
 	missed: { type: Boolean, default: false },
 	compact: { type: Boolean, default: false },
+	// Which turn this card belongs to. The transcript shows several answers at once, so a
+	// bare index would give every turn's first source the same element id and send a
+	// citation chip scrolling to the wrong conversation.
+	scope: { type: String, default: "" },
 });
+
+const domId = computed(() =>
+	props.scope ? `rag-source-${props.scope}-${props.index}` : `rag-source-${props.index}`,
+);
 
 // The stored chunk is markdown; the card shows a plain-text preview, so heading hashes
 // and emphasis markers are stripped rather than rendered.
@@ -27,7 +36,7 @@ const snippet = computed(() =>
 		.replace(/^\s*\|?[\s:|-]{6,}\|?\s*$/gm, "")
 		.replace(/[ \t]*\|[ \t]*/g, " · ")
 		.replace(/(?:\s*·\s*){2,}/g, " · ")
-		.trim()
+		.trim(),
 );
 
 // The backend zero-fills the provenance block on a citation it never quoted, so 0 means
@@ -100,25 +109,57 @@ const QUOTE_STATUS = {
 const quote = computed(() => (props.hit.quote || "").trim());
 const quoteStatus = computed(() => (quote.value ? QUOTE_STATUS[props.hit.quote_status] : null));
 
-const wikiHref = computed(() => {
-	if (!props.hit.wiki_route) return "";
-	const page = resolved(props.hit.quote_page_no)
-		? props.hit.quote_page_no
-		: props.hit.page_start;
-	return resolved(page) ? `/${props.hit.wiki_route}#page-${page}` : `/${props.hit.wiki_route}`;
+// Where the card leads. A generated wiki page is the reader's destination when there is
+// one; until the wiki is generated the section is still reviewable in the import view, so
+// a card falls back to it rather than being a dead end.
+const target = computed(() => {
+	const hit = props.hit;
+	const page = resolved(hit.quote_page_no) ? hit.quote_page_no : hit.page_start;
+	if (hit.wiki_route) {
+		return {
+			external: true,
+			// The wiki lives outside the SPA, so it is a plain href, opened in its own tab —
+			// following it in place would drop the conversation the reader is holding.
+			attrs: {
+				href: resolved(page) ? `/${hit.wiki_route}#page-${page}` : `/${hit.wiki_route}`,
+				target: "_blank",
+				rel: "noopener",
+			},
+			label: "Open in wiki",
+		};
+	}
+	// No import means the citation predates the field (a cached answer) — better no link
+	// than one built on a guess at the import's name.
+	if (!hit.wikify_import) return null;
+	return {
+		external: false,
+		attrs: {
+			// The tree tab, explicitly: it is the only one that honours `?section=`, and the
+			// import opens on the PDF tab by default — which for a document with no PDF
+			// attached lands the reader on an empty panel.
+			to: {
+				name: "ImportDetail",
+				params: { name: hit.wikify_import, tab: "tree" },
+				query: { section: hit.section },
+			},
+		},
+		label: "Open section",
+	};
 });
+
+const linkTag = computed(() => (target.value?.external ? "a" : RouterLink));
 </script>
 
 <template>
 	<article
-		:id="`rag-source-${index}`"
+		:id="domId"
 		class="flex min-w-0 gap-3 rounded-lg border p-3 transition-colors"
 		:class="[
 			highlighted
 				? 'border-outline-blue-3 bg-surface-blue-2'
 				: missed
-				? 'border-outline-amber-3 border-l-4 bg-surface-amber-2'
-				: 'border-outline-gray-2 bg-surface-elevation-1',
+					? 'border-outline-amber-3 border-l-4 bg-surface-amber-2'
+					: 'border-outline-gray-2 bg-surface-elevation-1',
 		]"
 	>
 		<span
@@ -127,8 +168,8 @@ const wikiHref = computed(() => {
 				highlighted
 					? 'bg-surface-gray-9 text-ink-gray-1'
 					: missed
-					? 'border border-outline-amber-3 bg-surface-amber-2 text-ink-gray-9'
-					: 'bg-surface-gray-3 text-ink-gray-7'
+						? 'border border-outline-amber-3 bg-surface-amber-2 text-ink-gray-9'
+						: 'bg-surface-gray-3 text-ink-gray-7'
 			"
 		>
 			{{ index }}
@@ -142,7 +183,17 @@ const wikiHref = computed(() => {
 				<h3
 					class="line-clamp-2 min-w-0 flex-1 text-base font-medium break-words text-ink-gray-9"
 				>
-					{{ hit.title || hit.document_title || hit.section }}
+					<component
+						:is="linkTag"
+						v-if="target"
+						v-bind="target.attrs"
+						class="hover:underline"
+					>
+						{{ hit.title || hit.document_title || hit.section }}
+					</component>
+					<template v-else>
+						{{ hit.title || hit.document_title || hit.section }}
+					</template>
 				</h3>
 				<!-- The flag claims a whole line above the title on a phone; sharing one
 				     line left the title about ten characters wide. The wrapper carries the
@@ -243,16 +294,21 @@ const wikiHref = computed(() => {
 					:basis="basis"
 					:unranked-set="unrankedSet"
 				/>
-				<a
-					v-if="wikiHref"
-					:href="wikiHref"
-					target="_blank"
-					rel="noopener"
+				<component
+					:is="linkTag"
+					v-if="target"
+					v-bind="target.attrs"
 					class="inline-flex shrink-0 items-center gap-1 text-xs text-ink-blue-8 hover:underline"
 				>
-					<span class="lucide-external-link size-3.5" aria-hidden="true" />
-					Open in wiki
-				</a>
+					<span
+						:class="[
+							target.external ? 'lucide-external-link' : 'lucide-arrow-right',
+							'size-3.5',
+						]"
+						aria-hidden="true"
+					/>
+					{{ target.label }}
+				</component>
 			</div>
 		</div>
 	</article>

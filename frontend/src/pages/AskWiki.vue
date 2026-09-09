@@ -1,273 +1,305 @@
 <script setup>
-// /ask — ask a question of the indexed wiki. Sources land before the answer (they are
-// published first), the routing decision is shown up front, and citation chips in the
-// answer jump to the source they came from.
-import { computed, nextTick, onUnmounted, ref, watch } from "vue";
+// /ask — a conversation with the indexed wiki. Turns stack oldest-first above a composer
+// pinned to the bottom, so a follow-up is asked where the last answer ended. Evidence is
+// folded into each answer (see AnswerTurn) rather than filling a column beside it: in a
+// running thread the answer is what is being read, and the sources are what you open when
+// you doubt it.
+import { computed, nextTick, ref, watch } from "vue";
+import { useRoute, useRouter } from "vue-router";
 import { Button, FormControl, PageHeader } from "frappe-ui";
-import MarkdownPreview from "@/components/MarkdownPreview.vue";
-import CostMeter from "@/components/rag/CostMeter.vue";
-import SourceCard from "@/components/rag/SourceCard.vue";
-import { isUnrankedSet, relevanceBasis, useProjectOptions, useRagAsk } from "@/composables/useRag";
+import AnswerTurn from "@/components/rag/AnswerTurn.vue";
+import AskComposer from "@/components/rag/AskComposer.vue";
+import AskHistory from "@/components/rag/AskHistory.vue";
+import { useIsNarrow } from "@/composables/useMediaQuery";
+import { useProjectOptions, useRagAsk } from "@/composables/useRag";
+import { sessionFullName } from "@/data/session";
 
 const projectOptions = useProjectOptions();
+const isNarrow = useIsNarrow();
 
 const {
 	question,
 	project,
-	askedQuestion,
-	sources,
-	answerText,
-	route,
-	refused,
-	tookMs,
+	turns,
 	streaming,
-	errorText,
-	failed,
-	usage,
 	sessionCost,
+	conversationId,
 	ask,
+	retryLastTurn,
+	newConversation,
+	sessions,
+	historyError,
+	historyLoading,
+	listSessions,
+	loadSession,
+	deleteSession,
 } = useRagAsk();
 
-const highlightedSource = ref(0);
+// Whether the rail is open survives a reload, like the project scope: a reader who works
+// out of the thread list shouldn't reopen it every visit. Never open by default on narrow
+// screens, where it covers the transcript it is meant to sit beside.
+const HISTORY_STORAGE_KEY = "wikify:ask:history-open";
 
-const basis = computed(() => relevanceBasis(route.value));
-const sourcesUnranked = computed(() => isUnrankedSet(sources.value));
-const documentCount = computed(
-	() => new Set(sources.value.map((hit) => hit.source_document).filter(Boolean)).size
-);
-const hasResult = computed(() => Boolean(askedQuestion.value) && !failed.value);
-const hasStreamedContent = computed(() => Boolean(sources.value.length || answerText.value));
-const elapsed = computed(() =>
-	tookMs.value >= 1000 ? `${(tookMs.value / 1000).toFixed(1)} s` : `${tookMs.value} ms`
-);
-
-// The answer streams a token at a time, and every delta would otherwise re-parse the whole
-// accumulated markdown. Rendering trails the text by one 50 ms tick — below the cadence a
-// reader can see, but it collapses hundreds of full re-parses into a handful.
-const RENDER_INTERVAL_MS = 50;
-// Seeded from the answer already in module state: a remount mid-read must show it at
-// once, not blank to "No answer returned" until the first tick lands.
-const renderedText = ref(answerText.value);
-let renderTimer = null;
-
-watch(answerText, (text) => {
-	if (!text) {
-		clearTimeout(renderTimer);
-		renderTimer = null;
-		renderedText.value = "";
-		return;
+function storedHistoryOpen() {
+	try {
+		return window.localStorage.getItem(HISTORY_STORAGE_KEY) === "true";
+	} catch {
+		return false;
 	}
-	if (renderTimer) return;
-	renderTimer = setTimeout(() => {
-		renderTimer = null;
-		renderedText.value = answerText.value;
-	}, RENDER_INTERVAL_MS);
+}
+
+const historyOpen = ref(storedHistoryOpen() && !isNarrow.value);
+
+watch(historyOpen, (open) => {
+	try {
+		window.localStorage.setItem(HISTORY_STORAGE_KEY, String(open));
+	} catch {
+		// Nothing to do: the rail just won't remember it was open.
+	}
 });
 
-onUnmounted(() => clearTimeout(renderTimer));
+// Re-read the list whenever what it should contain changes: the scope filters it, and a
+// first ask mints a conversation that belongs at the top of it.
+// Immediate, because the rail can come back already open from a previous visit — without
+// it that reader waits for an unrelated change before seeing a single conversation.
+watch(
+	[historyOpen, project, conversationId],
+	() => {
+		if (historyOpen.value) listSessions();
+	},
+	{ immediate: true },
+);
 
-// Citation markers `[1]` become clickable chips that scroll to their source card.
-function addCitationChips(rendered) {
-	return rendered.replace(
-		/\[(\d+)\]/g,
-		(match, number) =>
-			`<button type="button" class="rag-citation" data-citation="${number}">${number}</button>`
-	);
+async function openSession(name) {
+	await loadSession(name);
+	// On a phone the rail is an overlay over the very transcript it just loaded.
+	if (isNarrow.value) historyOpen.value = false;
 }
 
-async function scrollToSource(index) {
-	highlightedSource.value = index;
+const transcript = ref(null);
+const hasTurns = computed(() => turns.value.length > 0);
+
+// Follow the thread as it grows — but only while the reader is still at the bottom of it.
+// Scrolling up mid-answer is how you re-read what was already said, and an unconditional
+// follow yanks the viewport back down on every delta, making that impossible.
+const STICK_THRESHOLD_PX = 48;
+const stickToBottom = ref(true);
+
+function handleTranscriptScroll() {
+	const element = transcript.value;
+	if (!element) return;
+	const distanceFromBottom = element.scrollHeight - element.scrollTop - element.clientHeight;
+	stickToBottom.value = distanceFromBottom <= STICK_THRESHOLD_PX;
+}
+
+async function scrollToLatest() {
 	await nextTick();
-	const card = document.getElementById(`rag-source-${index}`);
-	card?.scrollIntoView({ behavior: "smooth", block: "center" });
+	const element = transcript.value;
+	if (element) element.scrollTop = element.scrollHeight;
 }
 
-function handleAnswerClick(event) {
-	const chip = event.target.closest?.("[data-citation]");
-	if (chip) scrollToSource(Number(chip.dataset.citation));
+watch(
+	() => turns.value.map((turn) => turn.rendered.length + turn.sources.length).join(),
+	() => {
+		if (stickToBottom.value) scrollToLatest();
+	},
+);
+
+// A new turn is the reader's own doing — asking, or opening a conversation from the rail —
+// so it always wins the follow back, wherever they had scrolled to before.
+watch(
+	() => turns.value.length,
+	() => {
+		stickToBottom.value = true;
+		scrollToLatest();
+	},
+);
+
+// Openers for a reader who has nothing to type yet. Deliberately generic: the scope can be
+// one project or all of them, so a suggestion can't name a document and still be true.
+// They live inside the empty state, which means the first turn retires them on its own.
+const SAMPLE_QUESTIONS = [
+	"What does this wiki cover?",
+	"Summarise the key sections",
+	"What is still open or unresolved?",
+];
+
+function askSample(text) {
+	if (streaming.value) return;
+	question.value = text;
+	ask();
 }
+
+// The landing greeting. Read once at setup rather than on a clock: a tab left open past
+// midnight showing the evening greeting is a smaller cost than a timer that exists only to
+// relabel a heading nobody is looking at.
+const firstName = computed(() => (sessionFullName.value || "").trim().split(/\s+/)[0] || "");
+
+function timeOfDayGreeting(now, name) {
+	const hour = now.getHours();
+	const suffix = name ? `, ${name}` : "";
+	if (hour >= 22 || hour < 5) return `Late night session${suffix}`;
+	if (hour < 12) return name ? `Hi ${name}` : "Hi";
+	if (hour < 17) return `Good afternoon${suffix}`;
+	const weekday = now.toLocaleDateString(undefined, { weekday: "long" });
+	return `Happy ${weekday}${suffix}`;
+}
+
+const greeting = computed(() => timeOfDayGreeting(new Date(), firstName.value));
+
+// The open conversation is route state, not just component state: a refresh, a bookmark or
+// a link pasted to a colleague must reopen the same thread. Replace rather than push —
+// minting an id is a side-effect of asking, not a step the reader should have to walk back
+// through with the back button.
+const route = useRoute();
+const router = useRouter();
+
+watch(conversationId, (id) => {
+	if ((id || "") === (route.params.conversationId || "")) return;
+	router.replace({ name: "AskWiki", params: id ? { conversationId: id } : {} });
+});
+
+// The other direction: a deep link on load, and the back/forward buttons after it.
+watch(
+	() => route.params.conversationId || "",
+	(id) => {
+		if (id === (conversationId.value || "")) return;
+		if (id) loadSession(id);
+		else newConversation();
+	},
+	{ immediate: true },
+);
 </script>
 
 <template>
-	<div class="mx-auto w-full max-w-6xl px-4 pb-16 sm:px-6 sm:pb-28">
+	<div class="flex h-full flex-col">
 		<PageHeader>
 			<div class="flex min-w-0 items-center gap-3">
-				<h1 class="text-md text-ink-gray-9">Ask</h1>
+				<h1 class="shrink-0 text-md text-ink-gray-9">Ask</h1>
 				<span class="hidden truncate text-sm text-ink-gray-5 lg:inline">
 					Answers grounded in your indexed documents
 				</span>
 			</div>
-			<div class="w-32 shrink-0 sm:w-44">
-				<FormControl v-model="project" type="select" :options="projectOptions" />
+			<div class="flex shrink-0 items-center gap-2">
+				<Button
+					v-if="hasTurns"
+					variant="ghost"
+					icon-left="lucide-plus"
+					label="New chat"
+					:disabled="streaming"
+					@click="newConversation"
+				/>
+				<div class="w-32 sm:w-44">
+					<FormControl v-model="project" type="select" :options="projectOptions" />
+				</div>
+				<Button
+					variant="ghost"
+					icon="lucide-history"
+					:aria-label="historyOpen ? 'Hide history' : 'Show history'"
+					@click="historyOpen = !historyOpen"
+				/>
 			</div>
 		</PageHeader>
 
-		<!-- Question. Sticky so a reader deep in a long source list can ask the next
-		     question without scrolling back up, and so the input stays put when the
-		     on-screen keyboard shrinks the viewport. -->
-		<form class="sticky top-0 z-10 flex gap-2 bg-surface-base py-3" @submit.prevent="ask">
-			<FormControl
-				v-model="question"
-				type="text"
-				class="flex-1"
-				placeholder="What do you want to know?"
-				autocomplete="off"
-			/>
-			<Button
-				class="shrink-0"
-				variant="solid"
-				label="Ask"
-				icon-left="lucide-sparkles"
-				:loading="streaming"
-				:disabled="!question.trim()"
-				@click="ask"
-			/>
-		</form>
-
-		<!-- The request can fail after realtime already delivered the route and sources, so
-		     a dropped connection only takes over the page when nothing arrived at all. -->
-		<div
-			v-if="failed"
-			class="mt-3 flex flex-col gap-2 rounded-md border border-outline-red-2 bg-surface-red-1 px-4 py-3 sm:flex-row sm:items-center sm:justify-between"
-		>
-			<div class="min-w-0">
-				<p class="text-base font-medium text-ink-gray-9">Nothing was searched</p>
-				<p class="text-sm text-ink-gray-7">{{ errorText }}</p>
-			</div>
-			<Button
-				class="shrink-0"
-				variant="subtle"
-				label="Retry"
-				icon-left="lucide-rotate-cw"
-				:loading="streaming"
-				@click="ask"
-			/>
-		</div>
-		<p
-			v-else-if="errorText"
-			class="mt-3 rounded-md bg-surface-amber-2 px-3 py-2 text-sm text-ink-gray-8"
-		>
-			The connection dropped mid-answer — showing everything that streamed in.
-		</p>
-
-		<div
-			v-if="!hasResult && !failed"
-			class="mt-10 flex flex-col items-center gap-3 rounded-lg border border-dashed border-outline-gray-2 px-6 py-16 text-center"
-		>
-			<span
-				class="lucide-message-circle-question size-7 text-ink-gray-4"
-				aria-hidden="true"
-			/>
-			<p class="text-base text-ink-gray-7">Ask a question of this wiki</p>
-			<p class="max-w-md text-sm text-ink-gray-5">
-				Every answer cites the sections it came from, and shows how the question was routed
-				— exhaustive, semantic, or hybrid.
-			</p>
-		</div>
-
-		<div v-else-if="hasResult" class="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-12">
-			<!-- Sources arrive first, so they lead the desktop layout. On a phone the answer
-			     goes first: burying it under fifteen source cards makes the reader scroll
-			     past the evidence to find what it is evidence for. -->
-			<section class="order-2 min-w-0 lg:order-1 lg:col-span-5">
-				<div class="mb-2 flex flex-wrap items-center gap-2">
-					<h2 class="text-base font-medium text-ink-gray-9">Sources</h2>
-					<span
-						class="rounded-full bg-surface-gray-2 px-2 py-0.5 text-xs text-ink-gray-7"
+		<div class="flex min-h-0 flex-1">
+			<div class="flex min-w-0 flex-1 flex-col">
+				<!-- Nothing asked yet: the composer is the page, centred under a greeting, the
+				     way a conversation starts rather than the way a log ends. The first turn
+				     moves it to the bottom (below), where a follow-up belongs. -->
+				<div
+					v-if="!hasTurns"
+					class="flex min-h-0 flex-1 flex-col items-center justify-center gap-6 px-4 sm:px-6"
+				>
+					<h2
+						class="flex items-center gap-2 text-center text-3xl text-ink-gray-9 sm:text-4xl"
 					>
-						{{ sources.length }}
-					</span>
-					<span v-if="documentCount" class="text-xs text-ink-gray-5">
-						across {{ documentCount }}
-						{{ documentCount === 1 ? "document" : "documents" }}
-					</span>
-				</div>
-
-				<div v-if="sources.length" class="flex flex-col gap-2">
-					<SourceCard
-						v-for="(hit, position) in sources"
-						:key="hit.chunk_id || position"
-						:hit="hit"
-						:index="position + 1"
-						:total="sources.length"
-						:basis="basis"
-						:unranked-set="sourcesUnranked"
-						:highlighted="highlightedSource === position + 1"
-					/>
-				</div>
-				<div
-					v-else
-					class="rounded-lg border border-dashed border-outline-gray-2 px-4 py-10 text-center text-sm text-ink-gray-5"
-				>
-					{{ streaming ? "Retrieving sources…" : "No sources matched this question." }}
-				</div>
-			</section>
-
-			<section class="order-1 min-w-0 lg:order-2 lg:col-span-7">
-				<div class="mb-2 flex flex-wrap items-center gap-x-3 gap-y-1">
-					<h2 class="text-base font-medium text-ink-gray-9">Answer</h2>
-					<span v-if="tookMs != null" class="text-xs text-ink-gray-5">
-						{{ elapsed }}
-					</span>
-					<div class="flex-1" />
-					<CostMeter
-						:cost="usage?.cost ?? null"
-						:prompt-tokens="usage?.promptTokens ?? null"
-						:completion-tokens="usage?.completionTokens ?? null"
-						:model="usage?.model || ''"
-						:session-cost="sessionCost"
-					/>
-				</div>
-
-				<div
-					v-if="refused"
-					class="rounded-lg border border-outline-amber-1 bg-surface-amber-2 px-4 py-4"
-				>
-					<div class="flex items-center gap-2">
-						<span class="lucide-info size-4 text-ink-amber-8" aria-hidden="true" />
-						<p class="text-base font-medium text-ink-gray-9">Not in this wiki</p>
-					</div>
-					<p class="mt-1.5 text-sm text-ink-gray-7">
-						{{
-							answerText ||
-							"The indexed documents don’t cover this. Rather than guess, the answer is withheld — try rephrasing, or widen the project scope."
-						}}
-					</p>
-				</div>
-
-				<div
-					v-else-if="renderedText"
-					class="rag-answer rounded-lg border border-outline-gray-2 bg-surface-elevation-1 px-4 py-4"
-					@click="handleAnswerClick"
-				>
-					<MarkdownPreview :content="renderedText" :decorate="addCitationChips" />
-				</div>
-
-				<!-- "No answer returned" is only true when the request completed and the
-				     model said nothing. If the connection dropped, the answer was lost in
-				     transit — saying otherwise sends the reader looking for a gap in the
-				     corpus that isn't there. -->
-				<div
-					v-else
-					class="rounded-lg border border-outline-gray-2 bg-surface-elevation-1 px-4 py-10 text-center text-sm text-ink-gray-5"
-				>
-					<template v-if="streaming">Composing the answer…</template>
-					<template v-else-if="errorText">
-						<p class="text-ink-gray-7">
-							The answer was lost in transit — the sources beside it were retrieved
-							before the connection dropped.
-						</p>
-						<Button
-							class="mt-3"
-							variant="subtle"
-							label="Retry"
-							icon-left="lucide-rotate-cw"
-							@click="ask"
+						<!-- The mark's glyph rather than logo.svg: that file bakes a #171717
+						     tile behind the same book-open path, which vanishes on a dark page
+						     and lands as a heavy black block on a light one. Bare, it takes the
+						     theme's ink like the rest of the heading. -->
+						<span
+							class="lucide-book-open size-9 shrink-0 text-ink-gray-9"
+							aria-hidden="true"
 						/>
-					</template>
-					<template v-else>No answer returned.</template>
+						<!-- leading-none so the line box hugs the glyphs: a greeting with no
+						     descenders otherwise sits high in it, and centring on that box
+						     leaves the mark looking lifted. -->
+						<span class="leading-none">{{ greeting }}</span>
+					</h2>
+
+					<AskComposer class="w-full max-w-3xl" />
+
+					<div class="flex flex-col items-center gap-3">
+						<div class="flex flex-wrap justify-center gap-2">
+							<button
+								v-for="sample in SAMPLE_QUESTIONS"
+								:key="sample"
+								type="button"
+								class="rounded-full border border-outline-gray-1 px-3 py-1 text-xs text-ink-gray-4 transition-colors hover:border-outline-gray-2 hover:bg-surface-gray-2 hover:text-ink-gray-6"
+								@click="askSample(sample)"
+							>
+								{{ sample }}
+							</button>
+						</div>
+						<p class="max-w-lg text-center text-xs text-ink-gray-4">
+							Every answer cites the sections it came from. Follow-up questions keep
+							the thread.
+						</p>
+					</div>
 				</div>
-			</section>
+
+				<template v-else>
+					<div
+						ref="transcript"
+						class="min-h-0 flex-1 overflow-y-auto"
+						@scroll.passive="handleTranscriptScroll"
+					>
+						<div
+							class="mx-auto flex w-full max-w-3xl flex-col gap-8 px-4 py-6 sm:px-6"
+						>
+							<AnswerTurn
+								v-for="turn in turns"
+								:key="turn.id"
+								:turn="turn"
+								:session-cost="sessionCost"
+								@retry="retryLastTurn"
+							/>
+						</div>
+					</div>
+
+					<!-- Pinned below the transcript, never scrolling with it: the next question is
+					     always reachable, however long the thread above it has grown. It floats as a
+					     card in the transcript's own column rather than an edge-to-edge footer, and
+					     the bottom padding keeps it off the shell's rounded corner. -->
+					<div class="shrink-0 bg-surface-base px-4 pb-4 sm:px-6">
+						<AskComposer class="mx-auto w-full max-w-3xl" />
+					</div>
+				</template>
+			</div>
+
+			<!-- The rail. Wide enough to read a question in two lines; an overlay below the
+			     split breakpoint, where a column beside the transcript would leave neither
+			     readable. -->
+			<div
+				v-if="historyOpen && isNarrow"
+				class="fixed inset-0 z-10 bg-black/20"
+				@click="historyOpen = false"
+			/>
+			<aside
+				v-if="historyOpen"
+				class="border-l border-outline-gray-1 bg-surface-base"
+				:class="isNarrow ? 'fixed inset-y-0 right-0 z-20 w-72 shadow-lg' : 'w-72 shrink-0'"
+			>
+				<AskHistory
+					:sessions="sessions"
+					:loading="historyLoading"
+					:error-text="historyError"
+					:active-id="conversationId || ''"
+					@select="openSession"
+					@delete="deleteSession"
+					@close="historyOpen = false"
+				/>
+			</aside>
 		</div>
 	</div>
 </template>

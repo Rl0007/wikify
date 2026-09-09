@@ -60,6 +60,9 @@ class Hit:
 	page_start: int
 	page_end: int
 	wiki_route: str | None
+	# The import the section came from, so a citation can lead somewhere even before the wiki
+	# is generated: the review view is addressed by import, not by source document.
+	wikify_import: str | None
 	score: float
 	vector_rank: int | None = None
 	fts_rank: int | None = None
@@ -212,7 +215,7 @@ def expand_to_sections(
 		for document in evidence.get_rows_by_name(
 			"Source Document",
 			[entry["row"]["source_document"] for entry in best.values()],
-			["name", "title"],
+			["name", "title", "import"],
 		)
 	}
 
@@ -246,6 +249,7 @@ def expand_to_sections(
 				page_start=row.get("page_start") or 0,
 				page_end=row.get("page_end") or 0,
 				wiki_route=row.get("wiki_route") or None,
+				wikify_import=(documents.get(row["source_document"]) or {}).get("import"),
 				score=round(entry["score"], 6),
 				vector_rank=min(vector_hits) if vector_hits else None,
 				fts_rank=min(fts_hits) if fts_hits else None,

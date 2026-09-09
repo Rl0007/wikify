@@ -1,7 +1,7 @@
 // Data layer for the /ask RAG surface — thin wrappers over the `wikify.api.rag.*`
 // contract. Every call degrades gracefully: the backend may not be deployed yet, so
 // callers get `errorText` instead of an exception.
-import { computed, ref, watch } from "vue";
+import { computed, nextTick, ref, watch } from "vue";
 import { useCall, useList } from "frappe-ui";
 import { useSocket } from "@/socket";
 
@@ -108,44 +108,79 @@ export function useProjectOptions() {
 }
 
 // Kept at module scope, not per-instance: the layout remounts these pages on a viewport
-// breakpoint change, and a remount must not throw away the question, the project scope or
-// the results the user is reading.
+// breakpoint change, and a remount must not throw away the draft question, the project
+// scope or the transcript the user is reading.
 const question = ref("");
 const project = ref(storedProject());
-const askedQuestion = ref("");
-const sources = ref([]);
-const answerText = ref("");
-const route = ref(null);
-const refused = ref(false);
-const tookMs = ref(null);
-const errorText = ref("");
-// Spend on the last answer, and the running total for this browser session. The backend
-// may not report cost yet, so these stay null until a payload carries them rather than
-// defaulting to a zero that would read as "free".
-const usage = ref(null);
-const sessionCost = ref(0);
+// The conversation as the reader sees it: one entry per ask, oldest first. Each turn owns
+// its own sources, answer, route and spend, so a follow-up never overwrites the answer
+// above it — which is what makes the page a conversation rather than a result view.
+const turns = ref([]);
 const streaming = ref(false);
+// Running spend for this browser session. The backend may not report cost yet, so a turn's
+// own usage stays null until a payload carries it rather than defaulting to a zero that
+// would read as "free".
+const sessionCost = ref(0);
 const streamId = ref(null);
 // The conversation this tab is continuing. Null until the first answer names one, then
 // held across asks — clearing it would silently start a new conversation every question.
 const conversationId = ref(null);
 
+// The answer streams a token at a time, and every delta would otherwise re-parse the whole
+// accumulated markdown. `rendered` trails `answer` by one 50 ms tick — below the cadence a
+// reader can see, but it collapses hundreds of full re-parses into a handful.
+const RENDER_INTERVAL_MS = 50;
+let renderTimer = null;
+
+// The turn the live stream belongs to. Held as the object itself, not an index: an ask
+// that finishes after the reader started the next one must not write into its successor.
+// It must be the reactive proxy `turns` hands back, never the object that was pushed in —
+// writes to the raw object land in the same data but track nothing, so the answer arrives
+// and the transcript keeps showing "No answer returned".
+let activeTurn = null;
+
+function newTurn(text) {
+	return {
+		id: `${Date.now()}-${turns.value.length}`,
+		question: text,
+		sources: [],
+		answer: "",
+		rendered: "",
+		route: null,
+		refused: false,
+		tookMs: null,
+		usage: null,
+		errorText: "",
+		streaming: true,
+	};
+}
+
 // A conversation is scoped to the project it was opened against, so switching projects
 // starts a new one — otherwise the next follow-up would be rewritten against turns about
 // documents the user is no longer looking at.
 watch(project, (value) => {
-	conversationId.value = null;
 	rememberProject(value);
+	newConversation();
 });
 
-// True when the request failed and nothing was retrieved. The page must then show the
-// failure alone — empty "Sources 0 / No answer" panels would claim a search happened and
-// came back empty.
-const failed = computed(
-	() => Boolean(errorText.value) && !sources.value.length && !answerText.value,
-);
+function newConversation() {
+	conversationId.value = null;
+	activeTurn = null;
+	clearTimeout(renderTimer);
+	renderTimer = null;
+	turns.value = [];
+	streaming.value = false;
+	sessionCost.value = 0;
+}
 
-// The request itself is module state too, and for a stronger reason than the results:
+// True when the request failed and nothing was retrieved. The turn must then show the
+// failure alone — an empty "no sources / no answer" pair would claim a search happened and
+// came back empty.
+export function turnFailed(turn) {
+	return Boolean(turn.errorText) && !turn.sources.length && !turn.answer;
+}
+
+// The request itself is module state too, and for a stronger reason than the transcript:
 // `useCall` aborts its in-flight fetch whenever it is re-executed, and a component-scoped
 // call is thrown away with the component. An answer takes 10-25 s, long enough for a
 // remount (viewport breakpoint, hot reload, a nav there and back) to land mid-flight and
@@ -157,24 +192,37 @@ const askCall = useCall({
 	immediate: false,
 });
 
+function scheduleRender(turn) {
+	if (renderTimer) return;
+	renderTimer = setTimeout(() => {
+		renderTimer = null;
+		turn.rendered = turn.answer;
+	}, RENDER_INTERVAL_MS);
+}
+
 function handleAnswerEvent(payload) {
 	// Strict match: realtime is per-user, not per-tab, so another tab's (or another
 	// ask's) answer would otherwise stream into this one.
-	if (!payload || payload.stream !== streamId.value) return;
-	if (payload.route) route.value = payload.route;
-	if (payload.citations) sources.value = payload.citations;
-	if (payload.delta) answerText.value += payload.delta;
+	if (!payload || !activeTurn || payload.stream !== streamId.value) return;
+	const turn = activeTurn;
+	if (payload.route) turn.route = payload.route;
+	if (payload.citations) turn.sources = payload.citations;
+	if (payload.delta) {
+		turn.answer += payload.delta;
+		scheduleRender(turn);
+	}
 	if (payload.done) {
-		addUsage(payload);
+		addUsage(turn, payload);
+		turn.streaming = false;
 		streaming.value = false;
 	}
 }
 
 // The `done` event and the HTTP body carry the same fields; whichever arrives first
 // records the spend, and the second is ignored so a session total never double-counts.
-function addUsage(payload) {
-	if (typeof payload?.cost !== "number" || usage.value) return;
-	usage.value = {
+function addUsage(turn, payload) {
+	if (typeof payload?.cost !== "number" || turn.usage) return;
+	turn.usage = {
 		cost: payload.cost,
 		promptTokens: payload.prompt_tokens ?? null,
 		completionTokens: payload.completion_tokens ?? null,
@@ -183,21 +231,13 @@ function addUsage(payload) {
 	sessionCost.value += payload.cost;
 }
 
-function reset() {
-	sources.value = [];
-	answerText.value = "";
-	route.value = null;
-	refused.value = false;
-	tookMs.value = null;
-	errorText.value = "";
-	usage.value = null;
-}
-
 async function ask() {
 	const text = question.value.trim();
 	if (!text || streaming.value) return;
-	reset();
-	askedQuestion.value = text;
+	turns.value.push(newTurn(text));
+	const turn = turns.value.at(-1);
+	activeTurn = turn;
+	question.value = "";
 	streamId.value = newStreamId();
 	streaming.value = true;
 	try {
@@ -208,24 +248,170 @@ async function ask() {
 			session: conversationId.value,
 		});
 		if (askCall.error) {
-			errorText.value = errorMessage(askCall.error);
+			turn.errorText = errorMessage(askCall.error);
 			return;
 		}
 		if (!response) return;
-		if (response.route) route.value = response.route;
-		if (response.citations?.length) sources.value = response.citations;
+		if (response.route) turn.route = response.route;
+		if (response.citations?.length) turn.sources = response.citations;
 		// Realtime is best-effort (no replay); the HTTP body is authoritative when
 		// no deltas arrived — e.g. socketio down, or the worker finished first.
-		if (!answerText.value) answerText.value = response.answer || "";
+		if (!turn.answer) turn.answer = response.answer || "";
 		// The server owns the conversation's identity: it creates one on the first ask and
 		// returns the same name after. Recording it here is what replays history next turn.
 		if (response.session) conversationId.value = response.session;
-		refused.value = Boolean(response.refused);
-		tookMs.value = response.took_ms ?? null;
-		addUsage(response);
+		turn.refused = Boolean(response.refused);
+		turn.tookMs = response.took_ms ?? null;
+		addUsage(turn, response);
 	} finally {
+		clearTimeout(renderTimer);
+		renderTimer = null;
+		turn.rendered = turn.answer;
+		turn.streaming = false;
 		streaming.value = false;
 	}
+}
+
+// Re-run the last question. The failed turn is dropped first so a retry replaces it rather
+// than stacking a second copy of the same question in the transcript.
+async function retryLastTurn() {
+	const turn = turns.value.at(-1);
+	if (!turn || streaming.value) return;
+	turns.value.pop();
+	question.value = turn.question;
+	await ask();
+}
+
+// ── Conversation history ────────────────────────────────────────────────────────────
+// Every ask has been logged since 0.7 (`Wikify Ask Session` + `Wikify Ask Message`, via
+// `rag/history.py`); this is the read-back that was never wired up. Module scope like the
+// transcript, so reopening the panel shows the list it already read instead of a spinner.
+const sessions = ref([]);
+const historyError = ref("");
+
+const sessionListCall = useCall({
+	url: "/api/v2/method/wikify.api.ask_history.list_sessions",
+	method: "GET",
+	immediate: false,
+});
+const sessionGetCall = useCall({
+	url: "/api/v2/method/wikify.api.ask_history.get_session",
+	method: "GET",
+	immediate: false,
+});
+const sessionDeleteCall = useCall({
+	url: "/api/v2/method/wikify.api.ask_history.delete_session",
+	method: "POST",
+	immediate: false,
+});
+
+// A superseded request, not a failure. `useCall` aborts its in-flight fetch whenever it is
+// re-executed, and loading a conversation re-runs the list twice in quick succession — the
+// scope changes, then the conversation does. Reporting that abort would replace the list
+// with an error message while the request that superseded it is still on its way.
+function wasAborted(error) {
+	return /abort/i.test(error?.name || error?.message || "");
+}
+
+// Scoped to the project the reader is asking under, matching the rule that switching
+// projects starts a new conversation — history for documents they aren't looking at is
+// noise. "All projects" lists every conversation.
+async function listSessions() {
+	historyError.value = "";
+	const response = await sessionListCall.submit(project.value ? { project: project.value } : {});
+	if (sessionListCall.error) {
+		if (!wasAborted(sessionListCall.error)) {
+			historyError.value = errorMessage(sessionListCall.error);
+		}
+		return;
+	}
+	sessions.value = response || [];
+}
+
+// Stored rows back into the shape the transcript renders. A question and its answer are
+// two rows paired by their `turn` integer — creation order is only the fallback for rows
+// written before that column existed, because two asks logged inside the same second
+// order arbitrarily.
+function hydrateTurns(session, messages) {
+	const turnsByKey = new Map();
+	let questionsSeen = 0;
+	for (const row of messages || []) {
+		if (row.role === "question") questionsSeen += 1;
+		const key = row.turn || questionsSeen || 1;
+		let turn = turnsByKey.get(key);
+		if (!turn) {
+			turn = { ...newTurn(""), id: `${session}-${key}`, streaming: false };
+			turnsByKey.set(key, turn);
+		}
+		if (row.role === "question") turn.question = row.content || "";
+		else applyStoredAnswer(turn, row);
+	}
+	return [...turnsByKey.values()];
+}
+
+function applyStoredAnswer(turn, row) {
+	turn.answer = row.content || "";
+	turn.rendered = turn.answer;
+	turn.sources = row.citations || [];
+	turn.refused = Boolean(row.refused);
+	turn.tookMs = row.took_ms ?? null;
+	// The route decides how a hit may be labelled (see `relevanceBasis`), so a row that
+	// was never routed stays null rather than becoming an object of three empty fields —
+	// which would label an unranked set as hybrid.
+	turn.route = row.route_intent
+		? {
+				intent: row.route_intent,
+				section_type: row.route_section_type,
+				reason: row.route_reason,
+			}
+		: null;
+	turn.usage =
+		typeof row.cost === "number"
+			? {
+					cost: row.cost,
+					promptTokens: row.prompt_tokens ?? null,
+					completionTokens: row.completion_tokens ?? null,
+					model: row.model || "",
+				}
+			: null;
+}
+
+async function loadSession(name) {
+	// A live answer is streaming into `activeTurn`; swapping the transcript under it would
+	// leave the rest of that answer writing into an object no longer on screen.
+	if (streaming.value) return;
+	historyError.value = "";
+	const response = await sessionGetCall.submit({ name });
+	if (sessionGetCall.error) {
+		historyError.value = errorMessage(sessionGetCall.error);
+		return;
+	}
+	if (!response) return;
+	// Scope first, transcript second. The `project` watcher clears the transcript, and it
+	// runs on the scheduler rather than inline — hydrating before it fires would have the
+	// conversation we just restored wiped a tick later.
+	if ((response.project || "") !== project.value) {
+		project.value = response.project || "";
+		await nextTick();
+	}
+	turns.value = hydrateTurns(response.name, response.messages);
+	conversationId.value = response.name;
+	// The meter now totals the thread on screen, not what this browser happened to spend.
+	sessionCost.value = response.total_cost || 0;
+	activeTurn = null;
+}
+
+async function deleteSession(name) {
+	historyError.value = "";
+	await sessionDeleteCall.submit({ name });
+	if (sessionDeleteCall.error) {
+		historyError.value = errorMessage(sessionDeleteCall.error);
+		return;
+	}
+	sessions.value = sessions.value.filter((row) => row.name !== name);
+	// Deleting the open conversation leaves the transcript showing a thread the server no
+	// longer has — and the next follow-up would post to a dead docname.
+	if (conversationId.value === name) newConversation();
 }
 
 // Bound once, for the same reason the call is: a remount mid-answer must not unsubscribe
@@ -242,19 +428,19 @@ export function useRagAsk() {
 	return {
 		question,
 		project,
-		askedQuestion,
-		sources,
-		answerText,
-		route,
-		refused,
-		tookMs,
+		turns,
 		streaming,
-		errorText,
-		failed,
-		usage,
 		sessionCost,
+		conversationId,
 		ask,
-		reset,
+		retryLastTurn,
+		newConversation,
+		sessions,
+		historyError,
+		historyLoading: computed(() => sessionListCall.loading),
+		listSessions,
+		loadSession,
+		deleteSession,
 	};
 }
 

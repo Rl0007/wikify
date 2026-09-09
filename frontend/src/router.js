@@ -39,7 +39,9 @@ const routes = [
 		props: true,
 	},
 	{
-		path: "/ask",
+		// The conversation id rides in the path so a refresh, a bookmark or a pasted link
+		// reopens the thread rather than dropping it.
+		path: "/ask/:conversationId?",
 		name: "AskWiki",
 		component: () => import("@/pages/AskWiki.vue"),
 	},
