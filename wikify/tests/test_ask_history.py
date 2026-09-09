@@ -213,6 +213,25 @@ class TestAskHistoryPermissions(FrappeTestCase):
 		with self.assertRaises(frappe.PermissionError):
 			history.record_turn(self.session, "Sneaking in", make_result())
 
+	def test_another_user_cannot_insert_a_turn_directly(self):
+		"""`record_turn` guards the API path; this is the DocType refusing on its own.
+
+		`if_owner` does not constrain `create`, so role All holding `create` let anyone insert
+		a row pointing `session` at a conversation they do not own — poisoning its transcript
+		and the cost totals summed from it.
+		"""
+		frappe.set_user(self.other_user)
+		forged = frappe.get_doc(
+			{
+				"doctype": "Wikify Ask Message",
+				"session": self.session,
+				"role": "question",
+				"content": "Forged turn",
+			}
+		)
+		with self.assertRaises(frappe.PermissionError):
+			forged.insert()
+
 	def test_a_user_sees_their_own_conversation(self):
 		frappe.set_user(self.other_user)
 		own_session = history.record_turn(

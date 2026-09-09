@@ -136,7 +136,11 @@ def append_message(session: str, role: str, content: str, **values) -> str:
 	message = frappe.get_doc(
 		{"doctype": "Wikify Ask Message", "session": session, "role": role, "content": content, **values}
 	)
-	message.insert()
+	# The conversation is the object of authority and `record_turn` has already checked write
+	# on it. Role All cannot create a turn directly, because `if_owner` does not constrain
+	# `create` — it would let anyone insert a row pointing `session` at someone else's
+	# conversation and poison its transcript and cost totals.
+	message.insert(ignore_permissions=True)
 	return message.name
 
 

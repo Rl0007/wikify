@@ -103,7 +103,7 @@
    "label": "Sources"
   },
   {
-   "description": "The cited Hit dicts (JSON) exactly as the interface rendered them — kept so a later pass can ask which sources an answer actually stood on.",
+   "description": "The cited Hit dicts (JSON) exactly as the interface rendered them \u2014 kept so a later pass can ask which sources an answer actually stood on.",
    "fieldname": "citations",
    "fieldtype": "Long Text",
    "label": "Citations"
@@ -176,12 +176,9 @@
    "write": 1
   },
   {
-   "create": 1,
-   "delete": 1,
    "if_owner": 1,
    "read": 1,
-   "role": "All",
-   "write": 1
+   "role": "All"
   }
  ],
  "sort_field": "creation",
