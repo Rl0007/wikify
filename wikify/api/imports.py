@@ -66,12 +66,12 @@ def start_imports(files: list[dict] | str, project: str | None = None) -> list[s
 	if isinstance(files, str):
 		files = frappe.parse_json(files)
 	if not files:
-		frappe.throw("No files to import.")
+		frappe.throw(_("No files to import."))
 	if len(files) > MAX_BATCH:
 		frappe.throw(f"Import at most {MAX_BATCH} PDFs at a time (got {len(files)}).")
 
 	if any(not f.get("file_url") for f in files):
-		frappe.throw("Every file needs a file_url.")
+		frappe.throw(_("Every file needs a file_url."))
 
 	# Every url is checked before any Import is created, so a batch carrying one unreadable
 	# file enqueues nothing rather than half of itself.
@@ -95,7 +95,7 @@ def trigger_remediation(import_name: str, scope: str = "flagged") -> str:
 
 	imp = frappe.get_doc("Wikify Import", import_name)
 	if not imp.source_document:
-		frappe.throw("Nothing to remediate — parse hasn't produced a document yet.")
+		frappe.throw(_("Nothing to remediate — parse hasn't produced a document yet."))
 	if imp.status != "Review":
 		frappe.throw(f"Can only remediate from Review (current status: {imp.status}).")
 
@@ -120,7 +120,7 @@ def reclassify(import_name: str) -> str:
 	"""
 	imp = frappe.get_doc("Wikify Import", import_name)
 	if not imp.source_document:
-		frappe.throw("Nothing to classify — parse hasn't produced a document yet.")
+		frappe.throw(_("Nothing to classify — parse hasn't produced a document yet."))
 
 	frappe.enqueue(
 		"wikify.jobs.classify.run",
@@ -144,7 +144,7 @@ def preview_wiki(import_name: str) -> dict:
 	"""
 	imp = frappe.get_doc("Wikify Import", import_name)
 	if not imp.source_document:
-		frappe.throw("Nothing to preview — parse hasn't produced a document yet.")
+		frappe.throw(_("Nothing to preview — parse hasn't produced a document yet."))
 	preview = _preview_wiki(imp.source_document)
 	preview["wiki_space"] = frappe.db.get_value("Source Document", imp.source_document, "wiki_space")
 	return preview
@@ -164,7 +164,7 @@ def generate_wiki(
 	"""
 	imp = frappe.get_doc("Wikify Import", import_name)
 	if not imp.source_document:
-		frappe.throw("Nothing to generate — parse hasn't produced a document yet.")
+		frappe.throw(_("Nothing to generate — parse hasn't produced a document yet."))
 	if imp.status not in ("Graphed", "Completed"):
 		frappe.throw(
 			f"Approve the section tree first — can only generate from Graphed or Completed "
@@ -173,7 +173,7 @@ def generate_wiki(
 	if isinstance(new_space, str):
 		new_space = frappe.parse_json(new_space)
 	if not wiki_space and not new_space:
-		frappe.throw("Choose an existing Wiki Space or provide a new one.")
+		frappe.throw(_("Choose an existing Wiki Space or provide a new one."))
 
 	imp.db_set("status", "Generating Wiki")
 	frappe.enqueue(

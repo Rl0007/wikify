@@ -10,6 +10,7 @@ from __future__ import annotations
 import threading
 
 import frappe
+from frappe import _
 
 MODEL_NAME = "minishlab/potion-base-8M"
 # Pinned to the weights every eval number and every calibrated floor in `rag.answer` was
@@ -56,9 +57,11 @@ def load_model():
 	except Exception:
 		frappe.log_error(title="wikify: embedding model unavailable")
 		frappe.throw(
-			f"The embedding model ({MODEL_NAME}) is not available on this bench. "
-			"Run `bench --site <site> execute wikify.rag.warm.warm_models` on a host with "
-			"network access, or re-run migrate."
+			_(
+				"The embedding model ({0}) is not available on this bench. Run `bench --site "
+				"<site> execute wikify.rag.warm.warm_models` on a host with network access, or "
+				"re-run migrate."
+			).format(MODEL_NAME)
 		)
 
 

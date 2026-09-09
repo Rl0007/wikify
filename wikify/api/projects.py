@@ -8,6 +8,7 @@ default for an import that doesn't name a project.
 from __future__ import annotations
 
 import frappe
+from frappe import _
 
 from wikify.seed import seed_uncategorized_project
 
@@ -17,7 +18,7 @@ def create_project(project_name: str, description: str = "") -> str:
 	"""Create a Wikify Project and return its name."""
 	project_name = (project_name or "").strip()
 	if not project_name:
-		frappe.throw("Project name is required.")
+		frappe.throw(_("Project name is required."))
 	proj = frappe.new_doc("Wikify Project")
 	proj.project_name = project_name
 	proj.description = description
@@ -44,7 +45,7 @@ def update_project(
 	if project_name is not None:
 		stripped = project_name.strip()
 		if not stripped:
-			frappe.throw("Project name is required.")
+			frappe.throw(_("Project name is required."))
 		proj.project_name = stripped
 	if description is not None:
 		proj.description = description
