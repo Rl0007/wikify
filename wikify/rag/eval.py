@@ -1,35 +1,3 @@
-"""Retrieval evaluation — the POC-2 thesis measured, not asserted.
-
-Twelve golden questions over the Demo Corpus (`GOLDEN_QUESTIONS` below) are run down
-two legs and scored side by side:
-
-- **naive**  — plain top-k vector search on the raw question, no router, no filter. This is
-  what a textbook RAG pipeline does, and it is the baseline the POC argues against.
-- **routed** — `rag.router.route()` picks an intent, and an exhaustive intent takes the
-  `mode="filter"` leg that returns **every** matching section instead of a top-k guess.
-
-Three numbers per question. `recall@k` and `precision@k` are the usual ones;
-**completeness** is the one that carries the thesis — did the leg return *all* of the
-expected sources, or only some of them? A pipeline that finds six of fifteen job
-descriptions is 40% recall and 0% complete, and for "give me all the job descriptions"
-only the second number describes what the user actually got.
-
-**Why the ground truth is transcribed here rather than parsed from prose.** Expected-source
-lists written as English ("**Job Description — Community Midwife** (St Aubyn); ...
-(Meridian)") can only be read by a regex over prose, which rots silently the first time
-someone rewords a paragraph. Instead `GOLDEN_QUESTIONS` below carries the ground truth
-literally and `resolve_expected()` checks every title against the real Source Sections at
-run time — a transcription typo or a renamed section is a loud failure, not a quiet zero.
-
-Usage (from the bench root):
-
-    bench --site wikify.localhost execute wikify.rag.eval.main
-    bench --site wikify.localhost execute wikify.rag.eval.main --kwargs "{'k': 15}"
-
-`main()` prints the scorecard as text and writes the standalone HTML scorecard to
-`docs/implementation/media/rag-eval.html`.
-"""
-
 from __future__ import annotations
 
 import html as html_escape
@@ -80,10 +48,6 @@ MERIDIAN_JDS = [
 	"Job Description — Care Coordinator (Scheduling)",
 ]
 
-# `expected` is the ground-truth source set (Source Section titles, unique across the demo
-# corpus). `required` is the subset a semantic answer is wrong without.
-# `exhaustive` marks the lane where recall is scored against the COMPLETE set
-# rather than as recall@k.
 GOLDEN_QUESTIONS = [
 	{
 		"id": "G1",
@@ -255,18 +219,14 @@ GOLDEN_QUESTIONS = [
 		"exhaustive": False,
 		"expected": [],
 		"required": [],
-		# Scored on `refused == True`, not on citations — so this is the one question that
-		# needs the synthesis step, not just retrieval.
 		"expect_refusal": True,
 	},
 ]
 
 
 def demo_project() -> str:
-	"""The Demo Corpus project name. Autonames are not stable across sites, so look it up."""
 	project = frappe.db.get_value("Wikify Project", {"project_name": DEMO_PROJECT_NAME}, "name")
 	if not project:
-		# a bench instruction for the developer running the eval harness, not a user-facing message
 		# nosemgrep
 		frappe.throw(
 			f"No Wikify Project named '{DEMO_PROJECT_NAME}'. Seed it first: "
@@ -276,7 +236,6 @@ def demo_project() -> str:
 
 
 def corpus_sections(project: str) -> list[dict]:
-	"""Every leaf Source Section in the project, with the fields the scorecard renders."""
 	documents = frappe.get_all("Source Document", filters={"project": project}, fields=["name", "title"])
 	title_of = {document["name"]: document["title"] for document in documents}
 	if not title_of:
@@ -293,11 +252,6 @@ def corpus_sections(project: str) -> list[dict]:
 
 
 def resolve_expected(question: dict, sections: list[dict]) -> list[dict]:
-	"""Map the transcribed expected titles onto real Source Sections.
-
-	An unresolvable or ambiguous title means the ground truth has drifted from the corpus —
-	that must fail loudly here rather than quietly score as a miss later on.
-	"""
 	by_title: dict[str, list[dict]] = {}
 	for section in sections:
 		by_title.setdefault(section["title"], []).append(section)
@@ -336,7 +290,6 @@ def hit_summary(hit) -> dict:
 
 
 def score_leg(expected: list[dict], required: list[str], hits: list) -> dict:
-	"""recall@k, precision@k, and completeness for one retrieval leg of one question."""
 	expected_names = {section["name"] for section in expected}
 	returned = [hit_summary(hit) for hit in hits]
 	returned_names = {row["section"] for row in returned}
@@ -351,7 +304,6 @@ def score_leg(expected: list[dict], required: list[str], hits: list) -> dict:
 		"correct_count": len(found),
 		"recall": round(len(found) / len(expected_names), 4) if expected_names else None,
 		"precision": round(len(found) / len(returned), 4) if returned else None,
-		# The metric that carries the thesis: did we return ALL of them, or only some?
 		"complete": bool(expected_names) and expected_names <= returned_names,
 		"required_hit": required_names <= returned_names if required_names else None,
 		"missed": missed,
@@ -364,7 +316,6 @@ def mean(values: list[float]) -> float | None:
 
 
 def aggregate(rows: list[dict], mode: str) -> dict:
-	"""Aggregate one mode across the scored (non-refusal) questions."""
 	scored = [row for row in rows if row["modes"].get(mode) and row["expected_sources"]]
 	exhaustive = [row for row in scored if row["exhaustive"]]
 	legs = [row["modes"][mode] for row in scored]
@@ -393,17 +344,6 @@ def run_eval(
 	check_refusals: bool = True,
 	rerank: bool = False,
 ) -> dict:
-	"""Run every golden question down each mode and score it. JSON-serializable throughout.
-
-	`check_refusals` runs the full `answer()` synthesis for the refusal question only — it
-	is the one question that cannot be scored from retrieval alone, and it is also the only
-	one that costs a generation call.
-
-	`rerank` scores the routed leg AS THE PRODUCT SERVES IT. It defaults off because the
-	scorecard's argument is about routing, and an LLM rerank makes every number non-repeatable
-	— but with it off the harness is blind to `search.RERANK_CANDIDATES` and to the reranker's
-	own recall, which is exactly what a retrieval-tuning run has to see.
-	"""
 	project = project or demo_project()
 	sections = corpus_sections(project)
 	if not sections:
@@ -463,12 +403,6 @@ def run_eval(
 
 
 def compare_query(query: str, project: str | None = None, k: int = DEFAULT_K) -> dict:
-	"""One query, both legs, plus the diff — the structure `/rag-lab` renders.
-
-	The retrieval is `rag.answer.compare`, the same code `wikify.api.rag.compare` runs; this
-	is the harness-side, permission-free wrapper that adds the document-coverage counts the
-	visual comparison leans on.
-	"""
 	query = (query or "").strip()
 	if not query:
 		frappe.throw(_("Enter a query to compare."))
@@ -576,12 +510,6 @@ def bar(value, mode: str) -> str:
 
 
 def leg_cell(leg: dict | None, mode: str, scored: bool = True) -> str:
-	"""One naive/routed cell: the recall bar, the raw counts, and the misses in red.
-
-	`scored` is false for the refusal question, which has no expected sources — an empty
-	`missed` list there means "nothing was ever expected", not "we found everything", and
-	printing a green "complete" would be the harness flattering itself.
-	"""
 	if not leg:
 		return '<td class="metric">—</td>'
 	if not scored:
@@ -592,7 +520,6 @@ def leg_cell(leg: dict | None, mode: str, scored: bool = True) -> str:
 		)
 	pieces = [
 		bar(leg["recall"], mode),
-		# adjacent literals are one wrapped sentence, not a missing comma
 		# nosemgrep
 		f'<div class="metric">recall <b>{percent(leg["recall"])}</b> · '
 		f"precision <b>{percent(leg['precision'])}</b> · "
@@ -612,7 +539,6 @@ def leg_cell(leg: dict | None, mode: str, scored: bool = True) -> str:
 
 
 def verdict_cell(row: dict) -> str:
-	"""Did routed actually beat naive on this question? Reported honestly, including ties."""
 	naive, routed = row["modes"].get("naive"), row["modes"].get("routed")
 	if row["expect_refusal"]:
 		if row["refused"] is None:
@@ -628,8 +554,6 @@ def verdict_cell(row: dict) -> str:
 
 
 def question_row(row: dict) -> str:
-	"""One question. The route badge lives in the question cell, not the narrow id cell —
-	`staff_roles_and_responsibilities` is wider than the id column will ever be."""
 	route = row.get("route") or {}
 	kind = f'<span class="tag{" exh" if row["exhaustive"] else ""}">{escape(row["kind"])}</span>'
 	badge = ""
@@ -696,7 +620,6 @@ def summary_cards(results: dict) -> str:
 		),
 	]
 	return "".join(
-		# adjacent literals are one wrapped sentence, not a missing comma
 		# nosemgrep
 		f'<div class="card"><div class="label">{escape(label)}</div>'
 		f'<div class="value {tone}">{value}</div><div class="foot">{escape(foot)}</div></div>'
@@ -705,7 +628,6 @@ def summary_cards(results: dict) -> str:
 
 
 def render_scorecard(results: dict) -> str:
-	"""The whole scorecard as one self-contained HTML document — no CDN, no assets."""
 	rows = "".join(question_row(row) for row in results["questions"])
 	corpus = results["corpus"]
 	return f"""<!doctype html>
@@ -741,7 +663,6 @@ def scorecard_path() -> str:
 def write_scorecard(results: dict, path: str | None = None) -> str:
 	path = path or scorecard_path()
 	os.makedirs(os.path.dirname(path), exist_ok=True)
-	# path is built from frappe.get_app_path, not from request input
 	# nosemgrep
 	with open(path, "w", encoding="utf-8") as scorecard:
 		scorecard.write(render_scorecard(results))
@@ -749,7 +670,6 @@ def write_scorecard(results: dict, path: str | None = None) -> str:
 
 
 def format_summary(results: dict) -> str:
-	"""The terminal view — the same numbers the scorecard shows, pasteable into a report."""
 	lines = [
 		f"Project {results['project']} · k={results['k']} · {results['took_ms']} ms",
 		"",
@@ -758,8 +678,6 @@ def format_summary(results: dict) -> str:
 	for row in results["questions"]:
 		naive = row["modes"].get("naive") or {}
 		routed = row["modes"].get("routed") or {}
-		# The refusal question has no expected sources, so "partial" would be a lie there —
-		# it is scored on `refused`, printed on the next line.
 		scored = bool(row["expected_sources"])
 		lines.append(
 			f"{row['id']:4} {row['kind']:11} {len(row['expected_sources']):>4} "
@@ -786,7 +704,6 @@ def format_summary(results: dict) -> str:
 
 
 def main(project: str | None = None, k: int = DEFAULT_K, path: str | None = None) -> dict:
-	"""`bench --site <site> execute wikify.rag.eval.main` — run everything, write the scorecard."""
 	results = run_eval(project=project, k=int(k))
 	written = write_scorecard(results, path)
 	print(format_summary(results))

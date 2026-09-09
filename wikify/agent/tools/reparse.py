@@ -1,21 +1,3 @@
-"""Re-parse tools (0.2 Slice 14) — the headline "fix this page from plain English".
-
-  - `use_page_image` — deterministic, no LLM: replace a page's canonical markdown with an
-    embed of its rendered image. The literal "just paste the image of the PDF page".
-  - `reparse_page` — single-page cleanup/VLM re-parse steered by a plain-English
-    `instruction`, adopted as that page's canonical. Runs inline (page-scoped, fast).
-  - `reparse_document` — document-wide instruction-steered re-parse. **Expensive →
-    confirm-gated**: the loop holds it for a UI confirm card and enqueues the remediate
-    job only once the user approves.
-
-Page-scoped edits update the page's canonical, then **propagate** (0.3 Slice 18): when
-exactly one deepest section owns the page, its markdown is rebuilt from canonical so the
-fix reaches the wiki preview in the same turn — tree untouched. When the page is a
-boundary page shared between sections, nothing is silently rewritten; the result string
-names the candidates and the follow-up tools, so the model reports honestly instead of
-claiming a user-visible fix it didn't make.
-"""
-
 from __future__ import annotations
 
 import frappe
@@ -26,7 +8,6 @@ from wikify.agent.registry import Tool
 
 
 def _pdf_path(source_document: str) -> str | None:
-	"""Full path to the document's source PDF (via its Import's attached File)."""
 	pdf_url = frappe.db.get_value("Wikify Import", {"source_document": source_document}, "pdf")
 	if not pdf_url:
 		return None
@@ -40,7 +21,6 @@ def _project_context(ctx: Ctx) -> str:
 	return frappe.db.get_value("Wikify Project", ctx.project, "context_prompt") or ""
 
 
-# the tool dispatcher hands every tool the same raw args dict
 # nosemgrep
 def _page_no(args: dict) -> int | None:
 	raw = args.get("page_no")
@@ -51,12 +31,6 @@ def _page_no(args: dict) -> int | None:
 
 
 def _propagate_page(source_document: str, page_no: int) -> str:
-	"""Push a fresh page canonical into the owning section (0.3 Slice 18).
-
-	Exactly one deepest covering section → rebuild its markdown and report both layers
-	updated. Zero or several → change nothing at the section layer and say exactly what
-	is still stale and which tool fixes it.
-	"""
 	from wikify.engine.sectionize import rebuild_section_markdown, sections_covering_page
 
 	owners = sections_covering_page(source_document, page_no)
@@ -157,7 +131,6 @@ TOOLS = [
 	Tool(
 		name="use_page_image",
 		side="server",
-		# adjacent literals are one wrapped sentence, not a missing comma
 		# nosemgrep
 		description=(
 			"Deterministically replace a page's canonical markdown with an embed of its "
@@ -178,7 +151,6 @@ TOOLS = [
 	Tool(
 		name="reparse_page",
 		side="server",
-		# adjacent literals are one wrapped sentence, not a missing comma
 		# nosemgrep
 		description=(
 			"Re-parse a single page, steered by a plain-English instruction (e.g. 'keep the "
@@ -206,7 +178,6 @@ TOOLS = [
 	Tool(
 		name="reparse_document",
 		side="server",
-		# adjacent literals are one wrapped sentence, not a missing comma
 		# nosemgrep
 		description=(
 			"Re-parse the WHOLE document, steered by a plain-English instruction. Expensive — "

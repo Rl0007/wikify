@@ -1,6 +1,5 @@
 # Copyright (c) 2026, BWH and contributors
 # For license information, please see license.txt
-
 import tempfile
 from pathlib import Path
 from unittest.mock import patch
@@ -17,9 +16,6 @@ _FOOTER = "|**Prepared by - Dr. A**|**Issued by: QMC**|**Approved by - Dr. B**|\
 
 
 class TestFinalizePersistsFurnitureRemoval(FrappeTestCase):
-	"""finalize_document strips running furniture from canonical markdown and persists it
-	(the section build already did so transiently; this makes the review view match)."""
-
 	def _parse_with_furniture(self) -> tuple[str, str, list[dict]]:
 		path = Path(tempfile.mkdtemp()) / "sample.pdf"
 		_make_sample_pdf(str(path))
@@ -32,9 +28,6 @@ class TestFinalizePersistsFurnitureRemoval(FrappeTestCase):
 			fields=["name", "page_no", "baseline_markdown"],
 			order_by="page_no asc",
 		)
-		# Seed each page's canonical markdown with furniture wrapping a deterministic body
-		# marker — the state the per-page cleanup leaves behind (banner recurs on every
-		# page; the sign-off footer is structural furniture).
 		for p in pages:
 			body = f"## {p['page_no']}. Section\nBODY-{p['page_no']} real content here"
 			canonical = f"{_BANNER}\n{_DOCCODE}\n\n{body}\n\n{_FOOTER}"
@@ -56,16 +49,15 @@ class TestFinalizePersistsFurnitureRemoval(FrappeTestCase):
 		)
 		for i, row in enumerate(canon, start=1):
 			md = row["canonical_markdown"]
-			self.assertNotIn("PROCEDURE MANUAL", md)  # recurring banner gone
-			self.assertNotIn("MAN/OBG", md)  # doc-code line gone
-			self.assertNotIn("Prepared by", md)  # sign-off footer gone
-			self.assertNotIn("|---|---|---|", md)  # its orphaned separator gone
-			self.assertIn(f"BODY-{i} real content", md)  # real body preserved
+			self.assertNotIn("PROCEDURE MANUAL", md)
+			self.assertNotIn("MAN/OBG", md)
+			self.assertNotIn("Prepared by", md)
+			self.assertNotIn("|---|---|---|", md)
+			self.assertIn(f"BODY-{i} real content", md)
 
 	def test_finalize_is_idempotent(self):
 		sd, pdf_path, _ = self._parse_with_furniture()
 		with patch.object(classify, "classify_section", return_value="other"):
 			finalize_document(sd, pdf_path)
-			# Second run finds nothing left to strip.
 			result2 = finalize_document(sd, pdf_path)
 		self.assertEqual(result2["pages_changed"], 0)

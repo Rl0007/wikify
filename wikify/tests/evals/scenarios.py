@@ -1,11 +1,3 @@
-"""Eval scenarios — each seeds a fixture, runs one real agent turn, and asserts on DB
-outcomes. Every scenario returns `{name, passed, checks: [(label, ok, detail)], final}`.
-
-Assertions target database state, not transcript wording, so they tolerate model
-nondeterminism; a flaky scenario is a prompt/tool-description bug — treat it as a
-real finding, not noise.
-"""
-
 from __future__ import annotations
 
 import re
@@ -36,15 +28,10 @@ def _finish(fixture: Fixture, keep: bool):
 	try:
 		fixture.cleanup()
 	except Exception:
-		# Never let teardown eat the scenario's check results.
 		print(f"  (cleanup failed for {fixture.sd} — rows left behind)")
 
 
-# --- Slice 17 -----------------------------------------------------------------------------
-
-
 def fix_broken_table(keep: bool = False) -> dict:
-	"""The AGT-2026-00167 replay: fix ToC bleed + a broken table the preview shows."""
 	fx = Fixture()
 	before, shape_before = fx.snapshot(), _tree_shape(fx)
 	turn = run_turn(
@@ -69,7 +56,6 @@ def fix_broken_table(keep: bool = False) -> dict:
 
 
 def honest_failure(keep: bool = False) -> dict:
-	"""Asked to update a generated wiki page that doesn't exist — must not claim success."""
 	fx = Fixture(with_wiki=False)
 	before = fx.snapshot()
 	turn = run_turn(
@@ -93,11 +79,7 @@ def honest_failure(keep: bool = False) -> dict:
 	return _result("honest_failure", checks, turn["final"])
 
 
-# --- Slice 18 -----------------------------------------------------------------------------
-
-
 def _attach_pdf(fx: Fixture) -> str:
-	"""A real 4-page PDF + Wikify Import so reparse tools can run. Returns the import name."""
 	import fitz
 	from frappe.utils.file_manager import save_file
 
@@ -107,7 +89,7 @@ def _attach_pdf(fx: Fixture) -> str:
 	pdf = fitz.open()
 	for n in sorted(_PAGES):
 		page = pdf.new_page()
-		text = re.sub(r"[|#*-]", " ", _PAGES[n])  # plain text body for the parser ground truth
+		text = re.sub(r"[|#*-]", " ", _PAGES[n])
 		page.insert_text((72, 72), text)
 	content = pdf.tobytes()
 	pdf.close()
@@ -121,14 +103,12 @@ def _attach_pdf(fx: Fixture) -> str:
 	imp.insert(ignore_permissions=True)
 	f = save_file(f"eval-{fx.sd}.pdf", content, "Wikify Import", imp.name, is_private=1)
 	imp.db_set("pdf", f.file_url)
-	# test setup must be visible to the worker connection
 	# nosemgrep
 	frappe.db.commit()
 	return imp.name
 
 
 def reparse_propagates(keep: bool = False) -> dict:
-	"""A page re-parse must reach the owning section (the preview layer) in the same turn."""
 	fx = Fixture()
 	_attach_pdf(fx)
 	before = fx.snapshot()
@@ -157,21 +137,16 @@ def reparse_propagates(keep: bool = False) -> dict:
 
 
 def boundary_no_guess(keep: bool = False) -> dict:
-	"""Re-parsing a boundary page shared by two sections must not silently rewrite either."""
 	fx = Fixture()
 	_attach_pdf(fx)
-	# Make page 4 a boundary page: PROFILE spans 3-4, PROCEDURES stays 4-4.
 	profile = fx.sections()["1. DEPARTMENTAL PROFILE"].name
 	frappe.db.set_value("Source Section", profile, "page_end", 4, update_modified=False)
-	# test setup must be visible to the worker connection
 	# nosemgrep
 	frappe.db.commit()
 	before = fx.snapshot()
 	turn = run_turn(fx, "Page 4 of the PDF was parsed badly — re-parse it.")
 	after = fx.snapshot()
 	honest, hdetail = honesty_check(turn, before, after)
-	# A boundary page must never be propagated SILENTLY. The agent may still resolve the
-	# ambiguity itself with an explicit rebuild/edit call — that's deliberate, not silent.
 	changed = [
 		t
 		for t in ("1. DEPARTMENTAL PROFILE", "2. PROCEDURES")
@@ -196,11 +171,7 @@ def boundary_no_guess(keep: bool = False) -> dict:
 	return _result("boundary_no_guess", checks, turn["final"])
 
 
-# --- Slice 19 -----------------------------------------------------------------------------
-
-
 def sync_generated_wiki(keep: bool = False) -> dict:
-	"""A content fix on a wiki-generated document must land on the live wiki page too."""
 	fx = Fixture(with_wiki=True)
 	before = fx.snapshot()
 	wiki_before = fx.wiki_pages()["REVISION HISTORY"]
@@ -239,11 +210,7 @@ def sync_generated_wiki(keep: bool = False) -> dict:
 	return _result("sync_generated_wiki", checks, turn["final"])
 
 
-# --- Slice 20 -----------------------------------------------------------------------------
-
-
 def split_and_delete(keep: bool = False) -> dict:
-	"""Structure surgery: delete (confirm auto-approved) + split at a heading."""
 	fx = Fixture()
 	before = fx.snapshot()
 	turn = run_turn(

@@ -24,8 +24,6 @@ _VALUE_LEAF_RE = re.compile(
 	r"(?:₹|rs\.?)?\s*[\d,]+(?:\.\d+)?\s*(?:%|per\s*cent|lakhs?|crores?)?$",
 	re.IGNORECASE,
 )
-# A fan of this many bare values under one parent reads as a table flattened into two
-# unbound columns, where a confidently wrong rate is worse than no diagram at all.
 MIN_VALUE_LEAVES = 3
 MIN_PARALLEL_GROUP = 3
 
@@ -182,10 +180,6 @@ def tabular_signals(labels: dict[str, str], edges: list[tuple[str, str]]) -> lis
 
 
 def grid_errors(source: str) -> list[str]:
-	# Parsed once per verdict: `remediate_pdf` runs this gate over every candidate of every
-	# page, and a source that parsed itself twice cost up to nine parses a page.
-	# Statements this cannot read contribute no nodes and no edges rather than condemning the
-	# block — the reader's parser is the authority on syntax, not this regex.
 	body = (source or "").strip()
 	if not body:
 		return ["empty diagram"]

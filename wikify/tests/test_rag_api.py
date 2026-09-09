@@ -1,14 +1,5 @@
 # Copyright (c) 2026, BWH and contributors
 # For license information, please see license.txt
-
-"""POC-2 phase 1 — routing, grounded answering, the whitelisted API, and the reindex hook.
-
-Retrieval itself (embedding, LanceDB) is covered by the `rag/` unit tests; here the store
-is stubbed so these assert the layer above it: which leg a route picks, when we refuse,
-that a citation always resolves, and that the ACL reaches the store as a pre-filter rather
-than a post-hoc trim.
-"""
-
 import threading
 import time
 from types import SimpleNamespace
@@ -59,14 +50,12 @@ def make_hit(
 
 
 def make_project(label: str):
-	"""A uniquely-named project — `project_name` is unique and tests share a database."""
 	return frappe.get_doc(
 		{"doctype": "Wikify Project", "project_name": f"{label} {frappe.generate_hash(length=6)}"}
 	).insert()
 
 
 def llm_reply(content: str) -> dict:
-	"""An `engine.llm.chat_completion` response body carrying `content`."""
 	return {"choices": [{"message": {"content": content}}]}
 
 
@@ -224,8 +213,6 @@ class TestRagApi(FrappeTestCase):
 		self.assertEqual(result["route"]["intent"], "exhaustive")
 
 	def test_reading_an_unreadable_project_is_refused(self):
-		# Guest stands in for any user without Wikify Project read: the scope guard throws
-		# and the ACL list resolves empty instead of blowing up on get_list.
 		frappe.set_user("Guest")
 		self.addCleanup(frappe.set_user, "Administrator")
 		with self.assertRaises(frappe.PermissionError):
@@ -257,7 +244,6 @@ class TestRagApi(FrappeTestCase):
 		self.assertEqual(enqueue.call_args.args[0], "wikify.rag.index.rebuild_project")
 
 	def test_index_status_scans_the_readable_projects_once(self):
-		"""One scan for the whole readable scope — not one per project."""
 		stats = {"chunks": 6, "sections": 4, "documents": 2, "indexed_at": "2026-01-01 00:00:00", "dim": 256}
 		with (
 			patch.object(api_rag, "readable_projects", return_value=["a", "b"]),
@@ -272,13 +258,6 @@ class TestRagApi(FrappeTestCase):
 
 
 class TestIndexStatsAcl(FrappeTestCase):
-	"""`index_stats` reads the chunk table, so it takes the same ACL decision `search` does.
-
-	It defaulted to `projects=None` — the permissive default the AclDecision sentinels were
-	introduced to make impossible — and reported chunk, section and document counts for
-	every project on the site to any caller that forgot the argument.
-	"""
-
 	def test_an_omitted_scope_throws_instead_of_counting_the_whole_site(self):
 		with self.assertRaises(frappe.ValidationError):
 			rag_index.index_stats()
@@ -296,8 +275,6 @@ class TestIndexStatsAcl(FrappeTestCase):
 
 
 class TestExploreAcl(FrappeTestCase):
-	"""Explore is a metadata read over the same corpus, so it carries the same ACL."""
-
 	def setUp(self):
 		self.project = make_project("Explore ACL")
 		self.document = frappe.get_doc(
@@ -323,11 +300,6 @@ class TestExploreAcl(FrappeTestCase):
 		self.assertIn(self.document.name, hidden)
 
 	def test_a_project_less_document_stays_visible(self):
-		"""The fix subtracts unreadable projects; it must not hide content with no project.
-
-		A document outside every project carries no permission statement, and scoping to
-		documents-in-readable-projects would have hidden it as a side effect.
-		"""
 		orphan = frappe.get_doc(
 			{"doctype": "Source Document", "title": "No Project Doc", "page_count": 1}
 		).insert(ignore_permissions=True)
@@ -336,8 +308,6 @@ class TestExploreAcl(FrappeTestCase):
 
 
 class TestAgentProjectScope(FrappeTestCase):
-	"""The model chooses `project`, so resolving it must apply permissions."""
-
 	def setUp(self):
 		self.project = make_project("Agent Scope")
 		self.addCleanup(frappe.set_user, "Administrator")
@@ -347,7 +317,6 @@ class TestAgentProjectScope(FrappeTestCase):
 		self.assertEqual(ctx.default_project(self.project.project_name), self.project.name)
 
 	def test_an_unreadable_project_does_not_resolve_by_title(self):
-		"""Otherwise a prompt widens the agent from its attached project to any on the site."""
 		frappe.set_user("Guest")
 		ctx = agent_context.Ctx(session="S", user="Guest", project=None)
 		self.assertIsNone(ctx.default_project(self.project.project_name))
@@ -355,8 +324,6 @@ class TestAgentProjectScope(FrappeTestCase):
 
 
 class TestRagApiAgainstTheRealIndex(FrappeTestCase):
-	"""One end-to-end pass over the real LanceDB store — everything else here stubs it."""
-
 	def setUp(self):
 		from wikify.rag import index as rag_index
 
@@ -467,7 +434,6 @@ class TestReindexHook(FrappeTestCase):
 
 
 def llm_reply_with_usage(content: str, cost: float, prompt: int, completion: int) -> dict:
-	"""An `engine.llm.chat_completion` body that also carries OpenRouter's usage block."""
 	return {
 		"choices": [{"message": {"content": content}}],
 		"usage": {"cost": cost, "prompt_tokens": prompt, "completion_tokens": completion},
@@ -475,15 +441,12 @@ def llm_reply_with_usage(content: str, cost: float, prompt: int, completion: int
 
 
 def streamed_chunks(pieces: list[str], usage: dict | None):
-	"""A litellm stream: content chunks, then the choice-less usage chunk `include_usage` adds."""
 	for piece in pieces:
 		yield SimpleNamespace(choices=[SimpleNamespace(delta=SimpleNamespace(content=piece))], usage=None)
 	yield SimpleNamespace(choices=[], usage=SimpleNamespace(**usage) if usage else None)
 
 
 class TestAskCost(FrappeTestCase):
-	"""What a question costs is the sum of every call it made, not just the synthesis."""
-
 	def test_answer_totals_the_routing_and_synthesis_calls(self):
 		route_reply = llm_reply_with_usage(
 			'{"intent": "semantic", "section_type": null, "query": "which roles", "reason": "r"}',
@@ -528,11 +491,6 @@ class TestAskCost(FrappeTestCase):
 		self.assertEqual(result["prompt_tokens"], 80)
 
 	def test_the_rerank_costs_the_question_nothing(self):
-		"""The reranker runs in-process, so a question is billed for routing and synthesis only.
-
-		It used to be a metered LLM call billed to the turn; this pins that the swap actually
-		removed that spend rather than merely moving where it was counted.
-		"""
 		with rag_usage.collect() as spend:
 			rag_search.rerank_hits("which roles", [make_hit()])
 
@@ -541,7 +499,6 @@ class TestAskCost(FrappeTestCase):
 		self.assertEqual(spend["completion_tokens"], 0)
 
 	def test_one_thread_is_never_billed_for_another(self):
-		"""The web worker answers on threads, so the accumulator must not be shared."""
 		totals = {}
 
 		def bill(name: str, cost: float):
@@ -577,8 +534,6 @@ class TestAskCost(FrappeTestCase):
 			"prompt_tokens": 1000,
 			"completion_tokens": 310,
 		}
-		# The cache is keyed only on inputs this test holds fixed, so a previous run's entry
-		# would be replayed and this would assert the router's price instead of the answer's.
 		with (
 			patch.object(api_rag.answer_cache, "get", return_value=None),
 			patch.object(api_rag.answer_cache, "set"),
@@ -597,15 +552,6 @@ class TestAskCost(FrappeTestCase):
 
 
 class TestSilentRerankFailure(FrappeTestCase):
-	"""The reranker must never be able to mute the product on its own.
-
-	Graded against the real corpus: "what are the slab rates under section 115BAC(1A)" is
-	answered at rank 2 by both the hybrid and the FTS leg, yet `ask` refused it because the
-	rerank scored every candidate 0.0. Refusing on that alone is the worst thing this system
-	does when it is wrong — a reader cannot tell "the reranker died" from "the document does
-	not cover this" — so a below-floor rerank now needs the embedding leg to agree.
-	"""
-
 	QUESTION = "what are the slab rates under section 115BAC(1A)"
 
 	def retrieved(self, vector_score: float | None = None) -> list[Hit]:
@@ -619,8 +565,6 @@ class TestSilentRerankFailure(FrappeTestCase):
 			return rag_search.rerank_hits(self.QUESTION, self.retrieved(vector_score))
 
 	def answer_over_the_rerank_path(self, scores: list[float], vector_score: float | None) -> dict:
-		"""End to end through the real rerank path, with only the store and the synthesis stubbed."""
-
 		def retrieve_and_rerank(query, **kwargs):
 			return rag_search.rerank_hits(query, self.retrieved(vector_score))
 
@@ -633,12 +577,10 @@ class TestSilentRerankFailure(FrappeTestCase):
 			return rag_answer.answer(self.QUESTION, rerank=True, allowed_projects=["PRJ"])
 
 	def test_an_all_zero_verdict_keeps_the_fusion_order(self):
-		"""Zero for everything separates nothing, so the fusion order has to survive it."""
 		hits = self.rerank([0.0, 0.0])
 		self.assertEqual([hit.title for hit in hits], ["I. INCOME TAX RATES", "II. SURCHARGE"])
 
 	def test_an_identical_non_zero_verdict_is_discarded(self):
-		"""One repeated score is the model declining to judge — not a ranking, not a refusal."""
 		hits = self.rerank([5.0, 5.0])
 		self.assertEqual([hit.rerank_score for hit in hits], [None, None])
 
@@ -647,22 +589,17 @@ class TestSilentRerankFailure(FrappeTestCase):
 		self.assertEqual([hit.title for hit in hits], ["II. SURCHARGE", "I. INCOME TAX RATES"])
 
 	def test_the_answer_is_not_refused_when_the_reranker_zeroes_a_hit_the_corpus_answers(self):
-		"""The 115BAC casualty: an all-zero rerank over a section the embedding leg matched
-		strongly must fall back to the fusion order and answer, never refuse."""
 		result = self.answer_over_the_rerank_path([0.0, 0.0], vector_score=0.61)
 
 		self.assertFalse(result["refused"])
 		self.assertEqual(len(result["citations"]), 2)
 
 	def test_an_overruled_rerank_reports_no_score_rather_than_zero(self):
-		"""The scores are known-bad once the embedding leg overrules them, and `null` is what
-		the source card hides on — a "rerank 0.0" chip reads as a dead reranker."""
 		result = self.answer_over_the_rerank_path([0.0, 0.0], vector_score=0.61)
 
 		self.assertTrue(all(citation["rerank_score"] is None for citation in result["citations"]))
 
 	def test_a_genuinely_uncovered_question_is_still_refused(self):
-		"""Both legs agree there is nothing here, so the honest answer is still to refuse."""
 		result = self.answer_over_the_rerank_path([0.0, 0.0], vector_score=0.39)
 
 		self.assertTrue(result["refused"])

@@ -1,14 +1,3 @@
-"""Whitelisted APIs for the Explore screens (Slice 6).
-
-The headline query — *"all job descriptions across all PDFs"* — is a metadata filter
-on `Source Section.section_type`, not a fuzzy search. `type_summary` drives the filter
-chips / type rail (counts incl. the `other` catch-all and an `untagged` bucket);
-`sections_by_type` returns the matching sections grouped by Source Document with
-page-range provenance. Both work globally (no `source_document`) or per-document.
-
-Mirrors the POC `graph.section_type_counts` / `graph.sections_by_type`.
-"""
-
 from __future__ import annotations
 
 import frappe
@@ -16,7 +5,7 @@ from frappe.query_builder.functions import Count
 
 from wikify.api.permission import assert_readable, hidden_documents
 
-UNTAGGED = "__untagged__"  # sentinel for sections classification hasn't reached yet
+UNTAGGED = "__untagged__"
 
 
 def _scope(source_document: str | None) -> dict:
@@ -24,19 +13,12 @@ def _scope(source_document: str | None) -> dict:
 
 
 def _docs_in_project(project: str | None) -> list[str] | None:
-	"""Source Document names in a project, or None when no project filter is applied.
-
-	Returns `[]` (not None) when the project owns no documents yet, so callers scope to
-	an empty set instead of falling through to "all documents".
-	"""
 	if not project:
 		return None
 	return frappe.get_all("Source Document", filters={"project": project}, pluck="name")
 
 
 def _counts(scope: list | None) -> dict[str, int]:
-	"""Section counts grouped by type, keyed by type (untagged → sentinel). `scope` is an
-	optional `[fieldname, operator, value]` clause on `source_document`."""
 	table = frappe.qb.DocType("Source Section")
 	query = (
 		frappe.qb.from_(table)
@@ -58,11 +40,6 @@ def _counts(scope: list | None) -> dict[str, int]:
 
 @frappe.whitelist()
 def type_summary(source_document: str | None = None, project: str | None = None) -> list[dict]:
-	"""Per-type section counts for the chips/rail (global, per-project, or per-doc).
-
-	Returns every Section Type in display order with its count (incl. zero, so chips are
-	stable), then an `untagged` bucket appended only when some section has no type yet.
-	"""
 	assert_readable(project, source_document)
 	doc_scope = _docs_in_project(project)
 	if source_document:
@@ -70,8 +47,6 @@ def type_summary(source_document: str | None = None, project: str | None = None)
 	elif doc_scope is not None:
 		counts = _counts(["source_document", "in", doc_scope]) if doc_scope else {}
 	else:
-		# Unscoped means "everything this user may read", never "everything on the site":
-		# these counts name how much content exists, which is itself something to leak.
 		hidden = hidden_documents()
 		counts = _counts(["source_document", "not in", hidden] if hidden else None)
 
@@ -107,12 +82,6 @@ def type_summary(source_document: str | None = None, project: str | None = None)
 def sections_by_type(
 	section_type: str, source_document: str | None = None, project: str | None = None
 ) -> list[dict]:
-	"""Sections of one type, grouped by Source Document (the cross-document headline).
-
-	Each group: `{source_document, doc_title, sections: [...]}`, ordered by document
-	title then tree position. `section_type` may be the `untagged` sentinel. Scope to a
-	single document (`source_document`) or a project (`project`), else spans all docs.
-	"""
 	assert_readable(project, source_document)
 	filters = _scope(source_document)
 	filters["section_type"] = ["is", "not set"] if section_type == UNTAGGED else section_type

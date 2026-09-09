@@ -1,11 +1,3 @@
-"""Whitelisted APIs for the AI agent.
-
-Slice 12 (walking skeleton): `run` (enqueue + 202), `cancel`, `get_session`. Slice 13
-adds `list_sessions` (history dropdown) + `new_session` (explicit fresh session) and
-attachment-aware scoping on `run`. Slice 16 adds session management
-(`rename_session`/`archive_session`) and `get_agent_models` for the panel's model picker.
-"""
-
 from __future__ import annotations
 
 import frappe
@@ -26,12 +18,6 @@ def run(
 	model: str | None = None,
 	approved_tools: list | str | None = None,
 ) -> dict:
-	"""Start an agent turn: append the user message, enqueue the loop, return 202.
-
-	The answer arrives over `wikify_agent_*:<session_id>` realtime, not this response.
-	`approved_tools` carries the confirm-gated tool names the user just approved (sent by
-	the panel's confirm card), so the loop runs them this turn instead of re-gating.
-	"""
 	prompt = (prompt or "").strip()
 	if not prompt:
 		frappe.throw(_("Message can't be empty."))
@@ -57,8 +43,6 @@ def run(
 		frappe.local.response["http_status_code"] = 429
 		frappe.throw(_("This session is already running. Wait for it to finish or cancel it."))
 
-	# An explicitly picked model (the panel's picker) sticks to the session so subsequent
-	# turns + the loop use it; otherwise keep whatever the session resolved to on creation.
 	if model and sess.model != resolved_model:
 		frappe.db.set_value("Wikify Agent Session", sess.name, "model", resolved_model)
 
@@ -82,7 +66,6 @@ def run(
 
 @frappe.whitelist(methods=["POST"])
 def cancel(session_id: str) -> dict:
-	"""Signal the running loop to stop at its next chunk."""
 	request_cancel(session_id)
 	return {"ok": True}
 
@@ -91,11 +74,6 @@ def cancel(session_id: str) -> dict:
 def list_sessions(
 	scope: str | None = None, project: str | None = None, source_document: str | None = None
 ) -> list[dict]:
-	"""The current user's sessions for the history dropdown, most-recent first.
-
-	Optional `scope`/`project`/`source_document` narrow the list to sessions opened in a
-	matching context (the panel passes the surface it's currently on).
-	"""
 	filters: dict = {"user": frappe.session.user, "status": "Active"}
 	if scope:
 		filters["scope"] = scope
@@ -116,7 +94,6 @@ def list_sessions(
 def new_session(
 	scope: str = "global", project: str | None = None, source_document: str | None = None
 ) -> dict:
-	"""Explicitly create a fresh session (the panel's "New chat" with the current scope)."""
 	sess = session.get_or_create(
 		None,
 		user=frappe.session.user,
@@ -129,7 +106,6 @@ def new_session(
 
 @frappe.whitelist()
 def get_session(session_id: str) -> dict:
-	"""A session + its ordered messages, for hydration when the panel opens/reloads."""
 	sess = frappe.get_doc("Wikify Agent Session", session_id)
 	messages = frappe.get_all(
 		"Wikify Agent Message",
@@ -152,7 +128,6 @@ def get_session(session_id: str) -> dict:
 
 
 def _owned_session(session_id: str):
-	"""Fetch a session, asserting the current user owns it (session management guard)."""
 	sess = frappe.get_doc("Wikify Agent Session", session_id)
 	if sess.user != frappe.session.user:
 		frappe.throw(_("You can only manage your own chats."), frappe.PermissionError)
@@ -161,7 +136,6 @@ def _owned_session(session_id: str):
 
 @frappe.whitelist(methods=["POST"])
 def rename_session(session_id: str, title: str) -> dict:
-	"""Rename a session (the history list / panel header)."""
 	title = (title or "").strip()
 	if not title:
 		frappe.throw(_("Title can't be empty."))
@@ -172,7 +146,6 @@ def rename_session(session_id: str, title: str) -> dict:
 
 @frappe.whitelist(methods=["POST"])
 def archive_session(session_id: str) -> dict:
-	"""Archive a session — it drops out of the (Active-only) history list."""
 	_owned_session(session_id)
 	frappe.db.set_value("Wikify Agent Session", session_id, "status", "Archived")
 	return {"ok": True}
@@ -180,5 +153,4 @@ def archive_session(session_id: str) -> dict:
 
 @frappe.whitelist()
 def get_agent_models() -> list[str]:
-	"""Model ids for the panel's picker (resolved default + configured pipeline models)."""
 	return llm.agent_models()

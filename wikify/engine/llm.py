@@ -1,14 +1,3 @@
-"""OpenRouter client — ported from the POC `config.chat_completion`.
-
-I/O-boundary change only: the POC used the `openai` SDK; here we call OpenRouter's
-REST endpoint with `requests` (already on the bench; no new dependency). The judge /
-cleanup / classifier logic that calls this is unchanged.
-
-Each call records latency + token cost in a thread-safe metrics buffer so the parse
-job can attach per-stage cost to the live log (and so a future benchmark can read it).
-The API key + model ids come from `engine.settings` (the `Wikify Settings` Single).
-"""
-
 from __future__ import annotations
 
 import threading
@@ -25,7 +14,6 @@ def has_openrouter() -> bool:
 	return bool(settings.openrouter_key())
 
 
-# --- lightweight per-call metrics (cost + latency), mirrors POC config.py ---
 _metrics_lock = threading.Lock()
 _metrics: list[dict] = []
 
@@ -52,19 +40,6 @@ def chat_completion(
 	api_key: str = "",
 	provider: dict | None = None,
 ) -> dict:
-	"""POST a chat completion to OpenRouter, recording latency + token cost.
-
-	Returns the parsed JSON response body (same shape as the OpenAI chat API, so
-	callers read `resp["choices"][0]["message"]["content"]`).
-
-	`api_key` is for callers running this on a worker thread: resolving the key reads
-	`Wikify Settings`, and `frappe.local` is unbound off the request thread, so the caller
-	resolves it once up front and hands it down. Omit it and it is resolved here as usual.
-
-	`provider` is OpenRouter's provider-preference object (`{"sort": "throughput"}`,
-	`{"order": [...], "allow_fallbacks": False}`). Omitted, OpenRouter picks by its
-	price-weighted default, which can land parallel calls on providers of different speed.
-	"""
 	key = api_key or settings.openrouter_key()
 	if not key:
 		raise RuntimeError("OPENROUTER key not set; cloud features unavailable.")
@@ -73,7 +48,7 @@ def chat_completion(
 		"model": model,
 		"messages": messages,
 		"temperature": temperature,
-		"usage": {"include": True},  # ask OpenRouter to return cost
+		"usage": {"include": True},
 	}
 	if response_format is not None:
 		body["response_format"] = response_format

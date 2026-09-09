@@ -1,13 +1,5 @@
 # Copyright (c) 2026, BWH and contributors
 # For license information, please see license.txt
-
-"""Batch import entry point — `start_imports` creates one Wikify Import per uploaded PDF
-and enqueues a parse job for each, in order, on a single project.
-
-`frappe.enqueue` is patched throughout: `run-tests` has no queue redis, and we only care
-that the jobs were handed off with the right arguments.
-"""
-
 import json
 from unittest.mock import patch
 
@@ -20,11 +12,6 @@ from wikify.seed import seed_uncategorized_project
 
 
 def make_file(file_name: str) -> str:
-	"""A real File row (and a real file on disk), returning its url.
-
-	`start_imports` refuses a url with no readable File behind it, so a fixture url has to
-	be one that actually exists rather than a plausible-looking string.
-	"""
 	document = fitz.open()
 	document.new_page().insert_text((72, 90), file_name, fontsize=12)
 	uploaded = frappe.get_doc(
@@ -44,8 +31,6 @@ def _files(n: int) -> list[dict]:
 
 class TestImportsApi(FrappeTestCase):
 	def setUp(self):
-		# FrappeTestCase rolls back per class, not per test, and `project_name` is unique —
-		# so each test needs its own project.
 		self.project = frappe.get_doc(
 			{
 				"doctype": "Wikify Project",
@@ -86,7 +71,6 @@ class TestImportsApi(FrappeTestCase):
 			self.assertEqual(frappe.db.get_value("Wikify Import", name, "project"), default)
 
 	def test_json_string_payload_parses(self):
-		"""The v2 API can hand `files` over as a JSON string."""
 		with patch.object(frappe, "enqueue"):
 			names = imports_api.start_imports(json.dumps(_files(2)), project=self.project.name)
 		self.assertEqual(len(names), 2)
@@ -110,7 +94,6 @@ class TestImportsApi(FrappeTestCase):
 		with patch.object(frappe, "enqueue") as enqueue:
 			with self.assertRaises(frappe.ValidationError):
 				imports_api.start_imports(files, project=self.project.name)
-			# Rejected up front — nothing was created.
 			enqueue.assert_not_called()
 		self.assertEqual(
 			frappe.db.count("Wikify Import", {"project": self.project.name}),
@@ -135,7 +118,6 @@ class TestImportsApi(FrappeTestCase):
 		self.assertEqual(frappe.db.count("Wikify Import", {"project": self.project.name}), 0)
 
 	def test_a_url_with_no_file_behind_it_is_rejected(self):
-		"""The url is written to the Import and a worker parses whatever it points at."""
 		with patch.object(frappe, "enqueue") as enqueue:
 			with self.assertRaises(frappe.PermissionError):
 				imports_api.start_imports(
@@ -154,7 +136,6 @@ class TestImportsApi(FrappeTestCase):
 		self.assertEqual(frappe.db.count("Wikify Import", {"project": self.project.name}), 0)
 
 	def test_another_users_private_file_is_not_importable(self):
-		"""The finding this guard exists for: naming someone else's attachment by url."""
 		file_url = make_file("private-to-admin.pdf")
 		outsider = frappe.get_doc(
 			{

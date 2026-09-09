@@ -5,18 +5,10 @@ from contextlib import contextmanager
 import frappe
 from frappe.utils.data import cint
 
-# Safety net only — the job clears its own marker; this stops a crashed worker from wedging
-# a project's index permanently.
 PENDING_TTL_SECONDS = 1800
 
 DIRTY_PAGES_HASH = "wikify_rag_dirty_pages"
 
-# Past this many sections in one pass, one project rebuild beats a scoped `upsert_sections`:
-# the batch re-embeds every section it touches anyway, so at some width re-embedding the whole
-# project costs the same and leaves the index consistent in one commit instead of two.
-# ponytail: coalescing rebuilds the WHOLE project, so a one-word title fix re-embeds every
-# chunk in it; switch to per-section `upsert_section` once a rebuild stops fitting in the
-# long queue's timeout.
 PROJECT_REBUILD_FANOUT = 10
 
 
@@ -29,9 +21,6 @@ def page_propagation_key(source_document: str) -> str:
 
 
 def pass_already_queued(key: str) -> bool:
-	# `cache.get_value` answers from `frappe.local.cache` once it has read a key, so a writer
-	# that set the marker keeps reading its own stale "1" long after the worker cleared it.
-	# `exists` is the only read here that goes to redis, which is where the worker clears it.
 	return bool(frappe.cache().exists(key))
 
 
@@ -75,7 +64,6 @@ def rebuild_pending_project(project: str) -> None:
 
 	frappe.cache().delete_value(pending_key(project))
 	rebuild_project(project)
-	# background reindex — the job owns its transaction
 	# nosemgrep
 	frappe.db.commit()
 
@@ -117,9 +105,6 @@ def document_structure_changed(source_document: str) -> None:
 
 
 def page_content_changed(page_name: str) -> None:
-	# This was a `Source Page.on_update` doc_event until 0.7 and therefore almost never ran:
-	# every real write to `canonical_markdown` goes through `store.set_canonical*`, which use
-	# `frappe.db.set_value` and fire no doc_event. Only the ORM saves in the tests saw it.
 	if indexing_suspended():
 		return
 	page = frappe.db.get_value("Source Page", page_name, ["source_document", "page_no"], as_dict=True)
@@ -211,7 +196,6 @@ def propagate_pages(source_document: str, pages: list[int]) -> None:
 	except Exception:
 		requeue_page_propagation(source_document, pages)
 		raise
-	# background reindex — the job owns its transaction
 	# nosemgrep
 	frappe.db.commit()
 

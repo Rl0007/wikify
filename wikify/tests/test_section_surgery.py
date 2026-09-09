@@ -1,12 +1,5 @@
 # Copyright (c) 2026, BWH and contributors
 # For license information, please see license.txt
-
-"""0.3 Slice 20 — structure surgery: create / delete / split / merge sections.
-
-Drives the whitelisted APIs + the agent tool wrappers, asserting NestedSet + denorm
-invariants after every operation (the same contract Slice 5's edits keep).
-"""
-
 from unittest.mock import patch
 
 import frappe
@@ -77,7 +70,6 @@ class TestSectionSurgery(FrappeTestCase):
 
 	def _assert_tree_invariants(self):
 		rows = list(self._rows().values())
-		# lft/rgt form a valid non-overlapping interval set; children nest inside parents.
 		bounds = sorted((r.lft, r.rgt) for r in rows)
 		seen = set()
 		for left, right in bounds:
@@ -93,8 +85,6 @@ class TestSectionSurgery(FrappeTestCase):
 				self.assertEqual(r.level, p.level + 1)
 				self.assertTrue(r.hierarchy_path.startswith(p.hierarchy_path + " > "))
 
-	# --- create -------------------------------------------------------------------------
-
 	def test_create_section_at_top_and_under_parent(self):
 		api.create_section(self.sd.name, "4. Delta", markdown="delta body")
 		rows = self._rows()
@@ -106,7 +96,6 @@ class TestSectionSurgery(FrappeTestCase):
 		rows = self._rows()
 		self.assertEqual(rows["1.2 New"].parent_source_section, rows["1. Alpha"].name)
 		self.assertEqual(rows["1.2 New"].level, 2)
-		# index=0 → placed before the existing child.
 		self.assertLess(rows["1.2 New"].lft, rows["1.1 Child"].lft)
 		self._assert_tree_invariants()
 
@@ -118,8 +107,6 @@ class TestSectionSurgery(FrappeTestCase):
 		)
 		with self.assertRaises(frappe.ValidationError):
 			api.create_section(other.name, "X", parent=self._name("1. Alpha"))
-
-	# --- split --------------------------------------------------------------------------
 
 	def test_split_at_missing_heading_fails_loudly(self):
 		before = self._rows()["1. Alpha"].markdown
@@ -135,11 +122,9 @@ class TestSectionSurgery(FrappeTestCase):
 		self.assertEqual(rows["1. Alpha"].markdown, "alpha intro")
 		self.assertTrue(rows["Part Two"].markdown.startswith("## Part Two"))
 		self.assertIn("part two body", rows["Part Two"].markdown)
-		# Sibling of Alpha (same parent), positioned after it, before Beta.
 		self.assertEqual(rows["Part Two"].parent_source_section, rows["1. Alpha"].parent_source_section)
 		self.assertLess(rows["1. Alpha"].rgt, rows["Part Two"].lft)
 		self.assertLess(rows["Part Two"].rgt, rows["2. Beta"].lft)
-		# Page range copied.
 		self.assertEqual(
 			(rows["Part Two"].page_start, rows["Part Two"].page_end),
 			(rows["1. Alpha"].page_start, rows["1. Alpha"].page_end),
@@ -149,8 +134,6 @@ class TestSectionSurgery(FrappeTestCase):
 	def test_split_accepts_heading_with_hashes(self):
 		res = api.split_section(self._name("1. Alpha"), "## Part Two", new_title="Custom")
 		self.assertEqual(res["new_title"], "Custom")
-
-	# --- merge --------------------------------------------------------------------------
 
 	def test_merge_rejects_non_siblings(self):
 		with self.assertRaises(frappe.ValidationError):
@@ -162,7 +145,6 @@ class TestSectionSurgery(FrappeTestCase):
 
 	def test_merge_concats_reparents_and_deletes_husks(self):
 		beta, gamma, child = self._name("2. Beta"), self._name("3. Gamma"), self._name("1.1 Child")
-		# Give Gamma a child so reparenting is exercised.
 		api.reorder_section(child, new_parent=gamma, new_index=0, siblings=[child])
 		res = api.merge_sections([beta, gamma])
 		self.assertEqual(res["name"], beta)
@@ -173,8 +155,6 @@ class TestSectionSurgery(FrappeTestCase):
 		self.assertEqual((rows["2. Beta"].page_start, rows["2. Beta"].page_end), (3, 4))
 		self.assertEqual(rows["2. Beta"].is_group, 1)
 		self._assert_tree_invariants()
-
-	# --- tool wrappers ------------------------------------------------------------------
 
 	def test_delete_tool_is_confirm_gated(self):
 		reg = build_default_registry()
@@ -193,16 +173,6 @@ class TestSectionSurgery(FrappeTestCase):
 
 
 class TestReplaceSectionsIsAtomic(FrappeTestCase):
-	"""A failed rebuild must leave the previous tree standing, not a truncated one.
-
-	`replace_sections` deletes the tree and then inserts the new one. Without a savepoint
-	an insert that threw left the document holding whatever prefix had landed and none of
-	the old rows — and `jobs.remediate`'s handler reverts the import to `Review` on the
-	stated premise that the parse result is intact, then commits, so the truncated tree
-	became the document. The over-length title that first triggered this is clipped now;
-	the hazard was the missing savepoint, not that one trigger.
-	"""
-
 	def setUp(self):
 		self.source_document = frappe.get_doc(
 			{"doctype": "Source Document", "title": "Atomic Rebuild"}

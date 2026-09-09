@@ -10,21 +10,11 @@ FTS_COLUMN = "text"
 
 
 def chunk_rows(chunks: list[chunk.Chunk]) -> list[dict]:
-	# The row shape lives next to the dataclass in `chunk.chunk_row`: LanceDB stores a missing
-	# declared column as null rather than raising, so a field added to the schema but forgotten
-	# there reads back empty on every chunk instead of failing loudly.
 	vectors = embed.embed([item.embed_text for item in chunks])
 	return [chunk.chunk_row(item, vector) for item, vector in zip(chunks, vectors, strict=True)]
 
 
 def refresh_fts_index(table) -> None:
-	# Rebuilt after every write because an FTS index only covers the rows present when it was
-	# built; searching then falls back to a flat scan for the rest, which scores differently.
-	# ponytail: full rebuild per write is fine at POC corpus size; move to an incremental
-	# `optimize()` once a project exceeds ~100k chunks.
-	# ponytail: two rebuilds racing overwrite each other's index, so the loser's rows stay
-	# FTS-invisible until the next write; serialise on a per-table lock once more than one
-	# project can be rebuilt at a time.
 	from lancedb.index import FTS
 
 	if not table.count_rows():
@@ -33,8 +23,6 @@ def refresh_fts_index(table) -> None:
 
 
 def requeue_rebuild(project: str) -> None:
-	# ponytail: no backoff and no attempt cap, so a project that fails deterministically
-	# re-queues forever; add a retry counter if a rebuild ever fails non-transiently.
 	from wikify.rag import events
 
 	frappe.cache().set_value(events.pending_key(project), "1", expires_in_sec=events.PENDING_TTL_SECONDS)
@@ -43,9 +31,6 @@ def requeue_rebuild(project: str) -> None:
 
 def rebuild_project(project: str) -> dict:
 	started = time.monotonic()
-	# Embed before deleting anything: embedding is the slow step and the one most likely to
-	# die, and doing it first keeps the window where the project has no rows to two adjacent
-	# LanceDB commits instead of spanning the whole encode.
 	chunks = chunk.chunks_for_project(project)
 	table = store.chunks_table(create=True)
 	rows = chunk_rows(chunks) if chunks else []
@@ -65,9 +50,6 @@ def rebuild_project(project: str) -> dict:
 
 
 def upsert_sections(section_names: list[str]) -> int:
-	# One delete, one add and one FTS rebuild for the whole batch. Done per section, a
-	# ten-section propagation pass rebuilt the entire FTS index ten times and re-read every
-	# page of the document ten times over — the cost was in the fan-out, not the work.
 	names = [name for name in dict.fromkeys(section_names) if name]
 	if not names:
 		return 0
