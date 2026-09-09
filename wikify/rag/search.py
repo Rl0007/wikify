@@ -404,10 +404,14 @@ def search(
 	section_type: str | None = None,
 	limit: int = 8,
 	mode: str = "hybrid",
-	rerank: bool = False,
+	use_reranker: bool = False,
 	allowed_projects: list[str] | AclDecision = ACL_REQUIRED,
 ) -> list[Hit]:
 	"""Retrieve sections for `query`. See the module docstring for what each mode means.
+
+	`use_reranker` is not called `rerank`: this module imports the `rerank` module, and a
+	bool of that name in this scope shadows it — `rerank.scores(...)` written inside
+	`search()` would raise AttributeError on a bool.
 
 	`mode="filter"` ignores `limit` by design — it returns every section matching the
 	metadata filter, which is the completeness guarantee the whole POC rests on.
@@ -453,7 +457,7 @@ def search(
 	hits = expand_to_sections(rows, vector_ranks, fts_ranks, vector_scores)
 	# Filter mode re-sorts by document/page below, so a rerank here would be an LLM call
 	# whose entire output is thrown away.
-	if rerank and query and mode != "filter":
+	if use_reranker and query and mode != "filter":
 		hits = rerank_hits(query, hits)
 
 	if mode == "filter":

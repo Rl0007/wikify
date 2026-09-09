@@ -97,7 +97,7 @@ def retrieve(
 		section_type=decided.section_type,
 		limit=EXHAUSTIVE_LIMIT if mode == "filter" else top_k,
 		mode=mode,
-		rerank=rerank,
+		use_reranker=rerank,
 		allowed_projects=allowed_projects,
 	)
 

@@ -34,6 +34,17 @@ from wikify.rag.router import route as route_question
 
 STREAM_EVENT = "wikify_rag_answer"
 
+DEFAULT_LIMIT = 8
+# `limit` widens the candidate list (`search.CANDIDATE_MULTIPLIER`), and with the reranker
+# on every candidate is a 512-token cross-encoder forward pass on the web worker, inside the
+# request. Unbounded, that is an authenticated way to spend the whole box on one call.
+MAX_LIMIT = 100
+
+
+def clamped_limit(limit) -> int:
+	"""A caller-supplied `limit`, bounded. See `MAX_LIMIT` for why it cannot be open-ended."""
+	return min(cint(limit) or DEFAULT_LIMIT, MAX_LIMIT)
+
 
 @frappe.whitelist()
 def search(
@@ -68,9 +79,9 @@ def search(
 		project=project,
 		source_document=source_document,
 		section_type=section_type,
-		limit=cint(limit) or 8,
+		limit=clamped_limit(limit),
 		mode=mode,
-		rerank=sbool(rerank),
+		use_reranker=sbool(rerank),
 		allowed_projects=readable_projects(),
 	)
 	return {

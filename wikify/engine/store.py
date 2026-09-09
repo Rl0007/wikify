@@ -380,37 +380,38 @@ def replace_sections(source_document: str, sections) -> int:
 	parent_paths = {tuple(s.hierarchy_path[:-1]) for s in sections if len(s.hierarchy_path) > 1}
 	path_to_name: dict[tuple[str, ...], str] = {}
 	suspended_by_caller = events.indexing_suspended()
-	# Restored rather than cleared: an outer bulk context may already hold the flag, and
-	# clearing it here would re-arm per-row indexing for the rest of that context.
-	skip_reindex_was = frappe.flags.wikify_skip_reindex
-	frappe.flags.wikify_skip_reindex = True
-	save_point = "wikify_replace_sections"
+	# A random name, the way `frappe.database.savepoint` does it: re-declaring a name
+	# destroys the outer savepoint holding it. Frappe's own helper is not reused because it
+	# swallows the exception instead of re-raising, and the caller must still see the failure.
+	save_point = f"wikify_replace_sections_{frappe.generate_hash(length=8)}"
+	# Nothing inside this block may commit: a commit releases the savepoint, and the rollback
+	# below would then fail with "savepoint does not exist". That rules out threading
+	# `jobs._util.publish_progress` (which commits) into the insert loop.
 	frappe.db.savepoint(save_point)
-	try:
-		# Full rebuild: raw-delete this doc's sections (other docs' subtrees are
-		# independent number-spaces, so NestedSet stays consistent without a global rebuild).
-		frappe.db.delete("Source Section", {"source_document": source_document})
-		for idx, sec in enumerate(sections):
-			doc = frappe.new_doc("Source Section")
-			doc.source_document = source_document
-			doc.parent_source_section = path_to_name.get(tuple(sec.hierarchy_path[:-1]))
-			doc.is_group = 1 if tuple(sec.hierarchy_path) in parent_paths else 0
-			doc.title = sec.title
-			doc.section_type = sec.section_type
-			doc.level = sec.level
-			doc.hierarchy_path = " > ".join(sec.hierarchy_path)
-			doc.page_start = sec.page_start
-			doc.page_end = sec.page_end
-			doc.sort_order = idx
-			doc.markdown = sec.markdown
-			doc.insert(ignore_permissions=True)
-			path_to_name[tuple(sec.hierarchy_path)] = doc.name
-	except Exception:
-		# The old tree is what the index still holds, so restoring it needs no rebuild.
-		frappe.db.rollback(save_point=save_point)
-		raise
-	finally:
-		frappe.flags.wikify_skip_reindex = skip_reindex_was
+	with events.suspended_indexing():
+		try:
+			# Full rebuild: raw-delete this doc's sections (other docs' subtrees are
+			# independent number-spaces, so NestedSet stays consistent without a global rebuild).
+			frappe.db.delete("Source Section", {"source_document": source_document})
+			for idx, sec in enumerate(sections):
+				doc = frappe.new_doc("Source Section")
+				doc.source_document = source_document
+				doc.parent_source_section = path_to_name.get(tuple(sec.hierarchy_path[:-1]))
+				doc.is_group = 1 if tuple(sec.hierarchy_path) in parent_paths else 0
+				doc.title = sec.title
+				doc.section_type = sec.section_type
+				doc.level = sec.level
+				doc.hierarchy_path = " > ".join(sec.hierarchy_path)
+				doc.page_start = sec.page_start
+				doc.page_end = sec.page_end
+				doc.sort_order = idx
+				doc.markdown = sec.markdown
+				doc.insert(ignore_permissions=True)
+				path_to_name[tuple(sec.hierarchy_path)] = doc.name
+		except Exception:
+			# The old tree is what the index still holds, so restoring it needs no rebuild.
+			frappe.db.rollback(save_point=save_point)
+			raise
 	frappe.db.release_savepoint(save_point)
 
 	# Success only. A document outside any project has nothing to scope an index to; it

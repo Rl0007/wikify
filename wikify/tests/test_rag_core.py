@@ -601,7 +601,7 @@ class TestRagCore(FrappeTestCase):
 				project=self.project.name,
 				section_type="job_description",
 				mode="filter",
-				rerank=True,
+				use_reranker=True,
 				allowed_projects=search.ALL_PROJECTS,
 			)
 
@@ -642,7 +642,7 @@ class TestRagCore(FrappeTestCase):
 			"allowed_projects": search.ALL_PROJECTS,
 		}
 		with patch("wikify.engine.llm.has_openrouter", return_value=False):
-			hits = search.search("coin", rerank=True, **scope)
+			hits = search.search("coin", use_reranker=True, **scope)
 
 		self.assertTrue(hits)
 		self.assertTrue(all(hit.rerank_score is not None for hit in hits))
@@ -658,7 +658,7 @@ class TestRagCore(FrappeTestCase):
 		order = [hit.section for hit in search.search("coin", **scope)]
 
 		with patch.object(rerank, "scores", side_effect=RuntimeError("no model")):
-			failed = search.search("coin", rerank=True, **scope)
+			failed = search.search("coin", use_reranker=True, **scope)
 
 		self.assertEqual([hit.section for hit in failed], order)
 		self.assertTrue(all(hit.rerank_score is None for hit in failed))
@@ -677,7 +677,7 @@ class TestRagCore(FrappeTestCase):
 		outsider = fusion_order[-1]
 
 		with patch.object(rerank, "scores", side_effect=scores_favouring(outsider.text or "")):
-			hits = search.search("coin", limit=1, rerank=True, **scope)
+			hits = search.search("coin", limit=1, use_reranker=True, **scope)
 
 		self.assertEqual([hit.section for hit in hits], [outsider.section])
 		self.assertEqual(hits[0].rerank_score, 9.0)
