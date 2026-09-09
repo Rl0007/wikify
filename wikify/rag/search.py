@@ -20,9 +20,6 @@ class AclDecision:
 		return f"search.{self.label}"
 
 
-# Both are distinct objects on purpose. `ALL_PROJECTS` used to be `None`, which collided
-# with every "argument not supplied" default in the call chain — a caller that forgot to
-# thread the user's projects silently got the unscoped opt-out instead of the guard.
 ALL_PROJECTS = AclDecision("ALL_PROJECTS")
 ACL_REQUIRED = AclDecision("ACL_REQUIRED")
 
@@ -41,8 +38,6 @@ RESULT_COLUMNS = [
 	"wiki_route",
 	"text",
 ]
-# The score column is requested explicitly: LanceDB only auto-projects it for now, and warns
-# that a future release will drop it from an explicit `select()`.
 VECTOR_COLUMNS = [*RESULT_COLUMNS, "_distance"]
 FTS_COLUMNS = [*RESULT_COLUMNS, "_score"]
 
@@ -60,8 +55,6 @@ class Hit:
 	page_start: int
 	page_end: int
 	wiki_route: str | None
-	# The import the section came from, so a citation can lead somewhere even before the wiki
-	# is generated: the review view is addressed by import, not by source document.
 	wikify_import: str | None
 	score: float
 	vector_rank: int | None = None
@@ -265,10 +258,6 @@ def rerank_scores(query: str, hits: list[Hit]) -> dict[int, float]:
 
 
 def usable_verdict(scores: dict[int, float], expected: int) -> bool:
-	# An all-zero result IS a verdict — every candidate's logit sat at the floor — and is
-	# trusted as one; `answer.below_floor` never lets it refuse alone. The short/flat shapes
-	# below cannot occur with a local scorer; the check is kept as the seam that catches a
-	# future scorer regressing into them.
 	if len(scores) < expected:
 		return False
 	present = set(scores.values())
@@ -276,15 +265,10 @@ def usable_verdict(scores: dict[int, float], expected: int) -> bool:
 
 
 def rank_key(hit: Hit) -> tuple[float, float]:
-	# One key drives both the rerank order and the `limit` slice. Sorting on `hit.score` after
-	# reranking used to discard the rerank outright: the winner was pushed back to its fusion
-	# position and sliced off, and questions the corpus answered came back refused.
 	return (hit.rerank_score if hit.rerank_score is not None else -1.0, hit.score)
 
 
 def rerank_hits(query: str, hits: list[Hit]) -> list[Hit]:
-	# Never fatal: the search path degrades to the unreranked order when the model cannot be
-	# loaded or the scores carry no verdict.
 	if not hits:
 		return hits
 

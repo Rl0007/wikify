@@ -1,14 +1,3 @@
-"""POC-0 scoring engine: combine deterministic + judge into a PageScore.
-
-Scoring is page-type aware. TEXT pages use recall/extra/table/judge. VISUAL pages
-(diagrams/flowcharts/images) have near-empty extractable text, so recall/extra are
-meaningless there — the composite is judge-dominant (the judge sees the image).
-
-Ported from the POC `verify/harness.py`. Thresholds come from `engine.settings`
-(user-tunable); the composite weights stay code-side in `engine.config`; the judge
-receives the page image as a data URL.
-"""
-
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -26,8 +15,8 @@ class PageScore:
 	table_score: float | None
 	judge_score: float | None
 	composite: float
-	verdict: str  # pass | escalate | review
-	kind: str = "text"  # text | visual
+	verdict: str
+	kind: str = "text"
 	notes: list[str] = field(default_factory=list)
 
 
@@ -40,9 +29,6 @@ def _composite(terms: dict, weights: dict) -> float:
 
 
 def get_verdict(composite: float) -> str:
-	"""The pass/escalate/review badge for a composite score. Public because the verdict
-	must follow whichever composite the user is actually reading — `store.set_canonical`
-	re-derives it from the canonical composite once a remediation is adopted."""
 	if composite >= float(settings.get("pass_threshold")):
 		return "pass"
 	if composite >= float(settings.get("escalate_threshold")):
@@ -51,11 +37,10 @@ def get_verdict(composite: float) -> str:
 
 
 def _run_judge(image_data_url: str, markdown: str, notes: list[str]) -> float | None:
-	"""Judge with one retry if the reply is unparseable."""
 	for _attempt in range(2):
 		try:
 			jr = judge_page(image_data_url, markdown)
-		except Exception as e:  # best-effort
+		except Exception as e:
 			notes.append(f"judge failed: {e}")
 			return None
 		if jr.get("judge_score") is not None:
@@ -85,7 +70,6 @@ def score_page(
 		judge_score = _run_judge(image_data_url, markdown, notes)
 
 	if page_kind == "visual":
-		# Text GT is unreliable on diagrams — judge dominates; recall/extra excluded.
 		composite = _composite({"judge_score": judge_score, "table_score": tscore}, config.VISUAL_WEIGHTS)
 		if judge_score is None:
 			notes.append("visual page but no judge score — composite unreliable")
@@ -105,8 +89,6 @@ def score_page(
 			notes.append("high extra ratio — possible hallucination")
 		if tscore == 0.0:
 			notes.append("table present but not reproduced")
-		# Structure-mangling artifacts (picture-omitted wrappers, <br> blobs, broken
-		# tables) aren't visible to recall/extra — penalize so the page gets flagged.
 		artifacts = det.parser_artifacts(markdown)
 		if artifacts:
 			composite = round(composite * 0.7, 3)

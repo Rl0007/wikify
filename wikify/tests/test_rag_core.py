@@ -1,21 +1,5 @@
 # Copyright (c) 2026, BWH and contributors
 # For license information, please see license.txt
-
-"""RAG POC — the retrieval core (`wikify.rag`).
-
-Runs against a real LanceDB, redirected to a temp directory so the site's own index is
-never touched. The embedding model is real (static, numpy-only, no network after the
-first load) — mocking it would only prove the mock ranks things.
-
-The load-bearing assertions:
-  - `mode="filter"` is **exhaustive** — every matching section comes back, `limit` and
-    similarity notwithstanding. That is the whole thesis of POC-2.
-  - metadata / ACL filters are pre-filters: a scoped query can never surface a row from
-    another project, even when that project dominates the similarity ranking.
-  - `embed_text` carries the contextual prefix, `text` stays clean for display.
-  - rerank degrades to unreranked results instead of breaking the search path.
-"""
-
 import re
 import shutil
 import tempfile
@@ -30,9 +14,6 @@ from wikify.rag import chunk, index, rerank, search, store
 
 
 def scores_favouring(wanted: str):
-	"""A scorer that gives the candidate whose text is `wanted` 9.0 and everything else 0.0,
-	so a `search` that quietly re-sorts by fusion score afterwards fails."""
-
 	def score(query, texts):
 		return [9.0 if text == wanted else 0.0 for text in texts]
 
@@ -40,7 +21,6 @@ def scores_favouring(wanted: str):
 
 
 def make_bare_hit(title: str, score: float = 0.03) -> search.Hit:
-	"""A Hit with no store behind it — for the rerank paths, which only read title and text."""
 	return search.Hit(
 		chunk_id=f"{title}::0",
 		section=f"sec-{title}",
@@ -64,10 +44,6 @@ RECIPE_SECTIONS = [
 	("Sprite notes", "compensation", "Costumes and backdrops are swapped from the sprite pane."),
 ]
 
-# The gold set for the recall test: five real role descriptions, deliberately written in
-# five different registers. The last two share almost no vocabulary with the question a
-# user actually asks ("give me all the job descriptions"), which is exactly why a top-k
-# vector search drops them.
 GOLD_ROLE_SECTIONS = [
 	("Backend Engineer", "Owns the ingestion service, its queues and its database migrations."),
 	("Frontend Engineer", "Builds the customer dashboard and keeps its accessibility audit green."),
@@ -76,7 +52,6 @@ GOLD_ROLE_SECTIONS = [
 	("Kiln Operator", "Stacks greenware, watches the cone packs and holds the soak at temperature."),
 ]
 
-# Distractors that echo the *words* of the question without being role descriptions at all.
 DISTRACTOR_TEMPLATE = (
 	"Job description formatting note {number}. Every job description in this handbook uses the "
 	"same job description template, and each description is reviewed before the job is posted."
@@ -117,8 +92,6 @@ class TestRagCore(FrappeTestCase):
 		super().tearDownClass()
 
 	def setUp(self):
-		# LanceDB writes aren't inside the test transaction, so the table is dropped per test
-		# — otherwise rows from a rolled-back project would still rank in the next one.
 		database = store.connect()
 		if store.TABLE_NAME in database.table_names():
 			database.drop_table(store.TABLE_NAME)
@@ -126,8 +99,6 @@ class TestRagCore(FrappeTestCase):
 		for type_name in ("job_description", "compensation"):
 			ensure_section_type(type_name)
 
-		# `project_name` is unique and the suite only rolls back per class, so each test gets
-		# its own pair of projects rather than colliding with the previous test's fixtures.
 		suffix = frappe.generate_hash(length=8)
 		self.project = frappe.get_doc(
 			{"doctype": "Wikify Project", "project_name": f"RAG Core Test {suffix}"}
@@ -172,7 +143,6 @@ class TestRagCore(FrappeTestCase):
 		)
 
 	def add_document(self, title, project, sections):
-		"""A second Source Document with its own section list, indexed into the project."""
 		document = frappe.get_doc({"doctype": "Source Document", "title": title, "project": project}).insert(
 			ignore_permissions=True
 		)
@@ -207,27 +177,19 @@ class TestRagCore(FrappeTestCase):
 
 		self.assertGreater(len(pieces), 1)
 		words = set(markdown.split())
-		# A piece may exceed the target by the heading line it carries, plus the overlap tail.
 		budget = chunk.CHUNK_TARGET_CHARS + chunk.CHUNK_OVERLAP_CHARS + len("## Alpha") + 4
 		for piece in pieces:
 			self.assertLessEqual(len(piece), budget)
 			self.assertTrue(set(piece.split()) <= words, piece[:80])
-			# No mid-word cut, and no heading stranded without the body it introduces.
 			blocks = [block for block in piece.split("\n\n") if block.strip()]
 			self.assertFalse(all(chunk.is_heading(block) for block in blocks), piece)
 			self.assertFalse(chunk.is_heading(blocks[-1]), piece)
-		# Every piece after the first repeats the tail of its predecessor.
 		for position in range(1, len(pieces)):
 			overlap = pieces[position].split("\n\n")[0]
 			self.assertIn(overlap, pieces[position - 1])
 		self.assertCoversMarkdown(markdown, pieces)
 
 	def assertCoversMarkdown(self, markdown, pieces):
-		"""Splitting is lossless: no heading line and no word may go missing.
-
-		`text` is the FTS column, so anything dropped here stops being keyword-searchable —
-		and a dropped heading takes the section's own title out of the index with it.
-		"""
 		joined = "\n".join(pieces)
 		for line in markdown.splitlines():
 			if chunk.is_heading(line):
@@ -249,7 +211,6 @@ class TestRagCore(FrappeTestCase):
 		pieces = chunk.split_markdown(markdown)
 
 		self.assertCoversMarkdown(markdown, pieces)
-		# The stack travels together, onto the piece that holds the body it introduces.
 		with_stack = [piece for piece in pieces if "### Backend Engineer" in piece]
 		self.assertEqual(len(with_stack), 1)
 		self.assertIn("# Handbook", with_stack[0])
@@ -260,7 +221,6 @@ class TestRagCore(FrappeTestCase):
 		pieces = chunk.split_markdown(markdown)
 
 		self.assertCoversMarkdown(markdown, pieces)
-		# The no-progress guard has to actually chunk them, not accumulate one giant piece.
 		self.assertGreater(len(pieces), 1)
 
 	def test_a_run_with_no_whitespace_is_cut_on_character_count(self):
@@ -271,7 +231,6 @@ class TestRagCore(FrappeTestCase):
 		budget = chunk.CHUNK_TARGET_CHARS + chunk.CHUNK_OVERLAP_CHARS + 4
 		for piece in pieces:
 			self.assertLessEqual(len(piece), budget)
-		# Overlap repeats characters, so the total can only be >= the input length, never less.
 		self.assertGreaterEqual(sum(piece.count("x") for piece in pieces), 50000)
 
 	def test_short_section_is_one_chunk(self):
@@ -279,14 +238,6 @@ class TestRagCore(FrappeTestCase):
 		self.assertEqual(chunk.split_markdown("   "), [])
 
 	def test_a_section_with_no_body_is_returned_by_filter_but_never_ranked(self):
-		"""Both halves of the title-only contract, which pull in opposite directions.
-
-		Filter mode promises 100% of the matching sections, so a row-less section is invisible
-		to it. But a body-less section matches on its title alone and then outranks real
-		content in every similarity leg — measured on the ICAI corpus, a 76-character section
-		titled almost exactly like the question took rank #1 in vector, hybrid and FTS at once
-		while carrying no answer. So it is indexed, flagged, and pre-filtered out of ranking.
-		"""
 		document = self.add_document(
 			"Empty Bodies",
 			self.project.name,
@@ -370,7 +321,6 @@ class TestRagCore(FrappeTestCase):
 		self.assertEqual(index.index_stats([self.project.name])["sections"], 2)
 
 	def test_upsert_removes_the_chunks_a_shrinking_section_leaves_behind(self):
-		"""Delete-then-add: a section that shrinks from N chunks to 1 must leave exactly 1 row."""
 		section = self.section_named("Timer recipe")
 		engine_store.set_section_markdown(section, "countdown timer variable " * 400)
 		self.assertGreater(index.upsert_section(section), 1)
@@ -389,7 +339,6 @@ class TestRagCore(FrappeTestCase):
 		self.assertEqual(len(remaining), 1)
 
 	def test_a_failed_rebuild_requeues_itself_instead_of_leaving_zero_rows(self):
-		"""A worker dying between the delete and the add used to leave a silently empty project."""
 		from wikify.rag import events
 
 		frappe.cache().delete_value(events.pending_key(self.project.name))
@@ -420,11 +369,6 @@ class TestRagCore(FrappeTestCase):
 		self.assertEqual({hit.title for hit in hits}, {"Coin recipe", "Timer recipe"})
 
 	def test_naive_vector_under_recalls_the_gold_set_that_filter_mode_returns_whole(self):
-		"""POC-2's success criterion: filter mode returns 100% of gold, top-k measurably misses.
-
-		The comparison is run at `limit=len(gold)` — the most generous honest budget for the
-		naive leg, since it is exactly the number of sections that should come back.
-		"""
 		question = "give me all the job descriptions"
 		roles = self.add_document(
 			"Roles Handbook",
@@ -463,8 +407,6 @@ class TestRagCore(FrappeTestCase):
 				allowed_projects=search.ALL_PROJECTS,
 			)
 		}
-		# The naive leg spent its full budget and still came back short — it is under-recalling,
-		# not simply returning fewer rows than it was allowed.
 		self.assertEqual(len(naive), len(gold))
 		missed = gold - naive
 		self.assertTrue(missed, "naive top-k returned the whole gold set — fixture has no distractors")
@@ -521,11 +463,6 @@ class TestRagCore(FrappeTestCase):
 		self.assertEqual(hit.title, "Sprite notes")
 
 	def test_scoping_and_acl_are_pre_filters(self):
-		"""The foreign project is indexed with more rows than the candidate window holds.
-
-		That is what makes this a test of *pre*-filtering: filtering after the top-k would
-		spend the whole window on foreign rows and return a truncated in-project set.
-		"""
 		query = "the coin scores a point"
 		crowd = search.CANDIDATE_FLOOR + 10
 		self.add_document(
@@ -541,8 +478,6 @@ class TestRagCore(FrappeTestCase):
 		)
 
 		unscoped = search.search(query, mode="vector", limit=10, allowed_projects=search.ALL_PROJECTS)
-		# The window really is crowded out by foreign rows: post-hoc filtering would have
-		# returned a truncated in-project set here, which is what the pre-filter prevents.
 		self.assertLess(len({hit.section for hit in unscoped} & mine), len(mine))
 
 		scoped = search.search(
@@ -580,7 +515,6 @@ class TestRagCore(FrappeTestCase):
 		self.assertEqual(search.search(query, mode="filter", allowed_projects=[]), [])
 
 	def test_search_refuses_to_run_without_an_acl_decision(self):
-		"""Fail-open is the wrong default for the one argument that enforces permissions."""
 		with self.assertRaises(frappe.ValidationError):
 			search.search("the coin scores a point", project=self.project.name)
 
@@ -595,7 +529,6 @@ class TestRagCore(FrappeTestCase):
 			)
 
 	def test_filter_mode_does_not_pay_for_a_rerank_it_discards(self):
-		"""Filter mode re-sorts by document and page, so scoring the candidates is wasted work."""
 		with patch.object(rerank, "scores") as scored:
 			hits = search.search(
 				"give me all the job descriptions",
@@ -619,7 +552,6 @@ class TestRagCore(FrappeTestCase):
 			allowed_projects=search.ALL_PROJECTS,
 		)
 		self.assertGreater(len(hits), 1)
-		# Score the *last* candidate highest, so a no-op reranker can't pass this.
 		wanted = hits[-1].section
 		graded = [1.0] * len(hits)
 		graded[-1] = 9.0
@@ -631,11 +563,6 @@ class TestRagCore(FrappeTestCase):
 		self.assertEqual(reranked[0].rerank_score, 9.0)
 
 	def test_rerank_runs_without_an_openrouter_key(self):
-		"""The scorer is local, so reranking survives a site with no LLM configured at all.
-
-		This is the opposite of the old behaviour, where an absent key skipped the rerank
-		silently and the answer quietly came back in fusion order.
-		"""
 		scope = {
 			"project": self.project.name,
 			"mode": "vector",
@@ -649,7 +576,6 @@ class TestRagCore(FrappeTestCase):
 		self.assertTrue(all(hit.rerank_score is not None for hit in hits))
 
 	def test_rerank_degrades_to_fusion_order_when_the_scorer_fails(self):
-		"""A reranker that cannot load must cost the ordering, never the answer."""
 		scope = {
 			"project": self.project.name,
 			"mode": "vector",
@@ -665,13 +591,6 @@ class TestRagCore(FrappeTestCase):
 		self.assertTrue(all(hit.rerank_score is None for hit in failed))
 
 	def test_search_returns_the_reranked_winner_not_the_fusion_winner(self):
-		"""The rerank has to survive the `limit` slice, or paying for it is theatre.
-
-		`search` used to re-sort by the fusion score after reranking, which put the reranked
-		winner back where fusion had it and then cut it off with everything past `limit`. On
-		PRJ-2026-00002 that is how "what are the slab rates under section 115BAC(1A)" scored
-		8.0 at fusion rank 10, never reached the answer, and was refused.
-		"""
 		scope = {"project": self.project.name, "mode": "hybrid", "allowed_projects": search.ALL_PROJECTS}
 		fusion_order = search.search("coin", limit=50, **scope)
 		self.assertGreater(len(fusion_order), 1)
@@ -684,12 +603,6 @@ class TestRagCore(FrappeTestCase):
 		self.assertEqual(hits[0].rerank_score, 9.0)
 
 	def test_every_candidate_is_scored(self):
-		"""The property the old batching existed to guarantee: no candidate goes unjudged.
-
-		An unscored candidate used to read as a confident 0 and sink below ones that were
-		genuinely worse. The local scorer is total by construction, so this pins that
-		rather than pinning how the work is divided up.
-		"""
 		hits = [make_bare_hit(f"Section {position}") for position in range(25)]
 
 		reranked = search.rerank_hits("coin", hits)
@@ -698,12 +611,6 @@ class TestRagCore(FrappeTestCase):
 		self.assertTrue(all(hit.rerank_score is not None for hit in reranked))
 
 	def test_a_partial_verdict_is_dropped_whole(self):
-		"""Kept as a seam, not because the current scorer can produce this.
-
-		`rag.rerank` returns one score per candidate by construction, so a short result can
-		only come from a future scorer regressing. If one ever does, the survivors must not
-		be ranked against nothing — the whole verdict is discarded instead.
-		"""
 		hits = [make_bare_hit(f"Section {position}") for position in range(3)]
 
 		self.assertFalse(search.usable_verdict({0: 9.0}, len(hits)))
@@ -715,8 +622,6 @@ class TestRagCore(FrappeTestCase):
 		self.assertTrue(all(hit.rerank_score is None for hit in reranked))
 
 	def test_the_similarity_leg_reports_an_absolute_score(self):
-		"""`answer.below_floor` needs a number that means the same thing across queries, so
-		the vector leg's similarity rides along even when fusion decides the order."""
 		scope = {"project": self.project.name, "allowed_projects": search.ALL_PROJECTS, "limit": 5}
 		for mode in ("hybrid", "vector"):
 			hits = search.search("coin", mode=mode, **scope)

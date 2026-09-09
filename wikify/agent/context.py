@@ -1,67 +1,29 @@
-"""Per-turn context for tool handlers + attachment resolution.
-
-Attachments are the "@-mention / file chips" the panel sends with each `run()` —
-`[{type, name, label}]` where `type ∈ {project, document, page, section}`. Slice 13
-resolves them into:
-  - **scoping defaults** (`Ctx.project` / `Ctx.source_document`) so tools rarely need ids,
-  - a **bounded context block** prepended to the turn (tree outline + the focused item's
-    body) — the agent pulls more via the `read_*` tools on demand (Builder's
-    skeleton-context idea),
-  - the attached **project's `context_prompt`** (injected into the system prompt by the
-    loop).
-
-Resolution is best-effort: a stale/deleted attachment is skipped, never fatal.
-"""
-
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 
 import frappe
 
-# Keep the prepended block bounded — the agent reads more on demand via read_* tools.
 _BODY_LIMIT = 4000
 
 
 @dataclass
 class Ctx:
-	"""What a tool handler needs: the session it runs in + scoping defaults."""
-
 	session: str
 	user: str
 	project: str | None = None
 	source_document: str | None = None
 	attachments: list[dict] = field(default_factory=list)
-	# Names of confirm-gated tools the user approved for this turn (Slice 14).
 	approved: set[str] = field(default_factory=set)
 
 	def default_document(self, explicit: str | None = None) -> str | None:
-		"""A tool's `source_document` arg, falling back to the attached document.
-
-		Models sometimes echo a display label ("Title (id)") instead of the bare id; an
-		explicit value that doesn't resolve to a real Source Document falls back to the
-		attached one rather than failing the lookup.
-		"""
 		if explicit and frappe.db.exists("Source Document", explicit):
 			return explicit
 		return self.source_document
 
 	def default_project(self, explicit: str | None = None) -> str | None:
-		"""A tool's `project` arg, resolved from a display name, falling back to the scope.
-
-		Same failure `default_document` guards, one field over: the user says "the Demo
-		Corpus project" and the model passes that title, but the id is `PRJ-2026-00003`.
-		An unresolved title scoped the query to zero documents, which the model then read
-		as "this content does not exist".
-
-		Resolved through `get_list`, which applies permissions: the model chooses this
-		argument, so an unfiltered lookup would let a prompt widen the agent's scope from
-		the attached project to any project on the site, by title.
-		"""
 		if not explicit:
 			return self.project
-		# `get_list` raises rather than returning [] for a user with no read on the DocType
-		# at all, and an unresolvable scope must never fail the turn — it falls back.
 		if not frappe.has_permission("Wikify Project", ptype="read"):
 			return self.project
 		matched = frappe.get_list(
@@ -73,11 +35,6 @@ class Ctx:
 		return matched[0] if matched else self.project
 
 	def default_import(self, explicit: str | None = None) -> str | None:
-		"""The Wikify Import owning the (resolved) document — needed by pipeline jobs.
-
-		The reclassify / regenerate / reparse-document tools enqueue existing jobs keyed
-		by `import_name`; the agent works in `source_document` terms, so resolve the link.
-		"""
 		source_document = self.default_document(explicit)
 		if not source_document:
 			return None
@@ -86,8 +43,6 @@ class Ctx:
 
 @dataclass
 class ResolvedContext:
-	"""The outcome of resolving a turn's attachments."""
-
 	project: str | None = None
 	source_document: str | None = None
 	project_context: str = ""
@@ -104,20 +59,12 @@ def _truncate(text: str) -> str:
 
 
 def _tree_outline(source_document: str) -> str:
-	"""A compact indented outline of a document's section tree (titles + types + pages)."""
 	from wikify.agent.tools.read import render_tree
 
 	return render_tree(source_document)
 
 
 def resolve_attachments(attachments: list[dict] | None) -> ResolvedContext:
-	"""Expand the chips into scoping defaults + a bounded context block.
-
-	The most specific attachment wins for the tool defaults (a page/section pins its
-	document); the project is taken from an explicit project chip or derived from the
-	attached document. Order of the rendered block follows project → document → page →
-	section so the focused item lands last (closest to the user's question).
-	"""
 	resolved = ResolvedContext()
 	if not attachments:
 		return resolved
@@ -150,7 +97,6 @@ def resolve_attachments(attachments: list[dict] | None) -> ResolvedContext:
 				resolved.source_document = resolved.source_document or sd
 				sections.append(block)
 
-	# Derive the project from the attached document when no explicit project chip.
 	if not resolved.project and resolved.source_document:
 		resolved.project = frappe.db.get_value("Source Document", resolved.source_document, "project")
 
@@ -213,8 +159,6 @@ def _render_section(name: str, view: str | None = None) -> tuple[str, str | None
 	stype = f" — type: {row.section_type}" if row.section_type else ""
 	header = f"## Section: {row.hierarchy_path or row.title}{stype}"
 	if view == "wiki":
-		# Wiki-tab preview (0.6 Slice 29): the user sees the rendered page, not raw
-		# markdown — bias the agent toward visible formatting/structure problems.
 		header += (
 			"\nThe user is reading this section as a rendered wiki page (Wiki tab preview) — "
 			"they see the final formatted output, not raw markdown. Formatting and structure "
@@ -227,8 +171,6 @@ def _render_section(name: str, view: str | None = None) -> tuple[str, str | None
 
 
 def _lint_line(lint_issues: str | None) -> str:
-	"""Stored lint issues as one context line (0.6 Slice 31), so 'fix this page' needs
-	no diagnosis round-trip. Empty string when clean."""
 	import json
 
 	try:

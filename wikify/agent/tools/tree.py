@@ -1,11 +1,3 @@
-"""Write / tree tools (0.2 Slice 14) — reuse the `api.sections` NestedSet mutations.
-
-These apply directly (cheap, reversible by re-editing): move, rename, retag, and the
-include-in-wiki toggle. Each calls the existing whitelisted mutation so `lft`/`rgt`/
-`level`/`hierarchy_path`/`is_group` stay consistent, then returns a short confirming
-summary. All are flagged `mutates=True` so the loop tells open Tree views to refetch.
-"""
-
 from __future__ import annotations
 
 import frappe
@@ -69,9 +61,6 @@ def _toggle_include_in_wiki(ctx: Ctx, args: dict) -> str:
 	return _("{0} '{1}' (and {2} section(s) in its subtree) {3} wiki generation.").format(
 		verb, _title(name), res["count"], "in" if include else "from"
 	)
-
-
-# --- 0.3 Slice 20: structure surgery ----------------------------------------------------
 
 
 def _create_section(ctx: Ctx, args: dict) -> str:
@@ -148,7 +137,6 @@ TOOLS = [
 	Tool(
 		name="move_section",
 		side="server",
-		# adjacent literals are one wrapped sentence, not a missing comma
 		# nosemgrep
 		description=(
 			"Reparent and/or reorder a section in the tree. Pass the section id and the new "
@@ -188,7 +176,6 @@ TOOLS = [
 	Tool(
 		name="set_section_type",
 		side="server",
-		# adjacent literals are one wrapped sentence, not a missing comma
 		# nosemgrep
 		description=(
 			"Retag a section with a Section Type (the machine key, e.g. surgical_procedures). "
@@ -227,7 +214,6 @@ TOOLS = [
 	Tool(
 		name="create_section",
 		side="server",
-		# adjacent literals are one wrapped sentence, not a missing comma
 		# nosemgrep
 		description=(
 			"Create a new section (a future wiki page) under a parent — e.g. 'add a glossary "
@@ -253,7 +239,6 @@ TOOLS = [
 	Tool(
 		name="delete_section",
 		side="server",
-		# adjacent literals are one wrapped sentence, not a missing comma
 		# nosemgrep
 		description=(
 			"Delete a section AND its whole subtree. Destructive — the user must confirm "
@@ -274,7 +259,6 @@ TOOLS = [
 	Tool(
 		name="split_section",
 		side="server",
-		# adjacent literals are one wrapped sentence, not a missing comma
 		# nosemgrep
 		description=(
 			"Split one section into two sibling pages at a markdown heading inside its body. "
@@ -300,7 +284,6 @@ TOOLS = [
 	Tool(
 		name="merge_sections",
 		side="server",
-		# adjacent literals are one wrapped sentence, not a missing comma
 		# nosemgrep
 		description=(
 			"Merge two or more SIBLING sections into the first listed: markdown concatenated "

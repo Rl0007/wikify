@@ -1,9 +1,3 @@
-"""Facade over the two agent DocTypes — `Wikify Agent Session` + `Wikify Agent Message`.
-
-Messages are standalone rows (not a child table), so the loop appends cheaply and one
-row streams without rewriting the parent — same reasoning as `Import Log Entry`.
-"""
-
 from __future__ import annotations
 
 import json
@@ -11,19 +5,12 @@ import json
 import frappe
 from frappe.utils import now_datetime
 
-# How many prior messages to replay as context each turn.
 HISTORY_LIMIT = 40
 
-# Both session doctypes cap `title` at 140; 120 leaves the trimmed line visibly short of it.
 TITLE_CHARS = 120
 
 
 def session_title(first_message: str | None) -> str:
-	"""A conversation's title: the first line of its opening message, trimmed.
-
-	Shared with the Ask surface (`rag.history`) so the two conversation lists cannot title
-	themselves differently.
-	"""
 	lines = (first_message or "").strip().splitlines()
 	return lines[0][:TITLE_CHARS] if lines else ""
 
@@ -37,7 +24,6 @@ def get_or_create(
 	source_document: str | None = None,
 	model: str | None = None,
 ):
-	"""Return an existing session (by id) or create a fresh one for this user."""
 	if session_id and frappe.db.exists("Wikify Agent Session", session_id):
 		return frappe.get_doc("Wikify Agent Session", session_id)
 
@@ -65,7 +51,6 @@ def append_message(
 	attachments: list | None = None,
 	metadata: dict | None = None,
 ):
-	"""Insert a `Wikify Agent Message` row and return it."""
 	doc = frappe.get_doc(
 		{
 			"doctype": "Wikify Agent Message",
@@ -85,7 +70,6 @@ def append_message(
 
 
 def update_message(name: str, **values) -> None:
-	"""Patch a message row (e.g. finalize a streamed assistant turn)."""
 	if "tool_calls" in values and values["tool_calls"] is not None:
 		values["tool_calls"] = json.dumps(values["tool_calls"])
 	if "metadata" in values:
@@ -94,7 +78,6 @@ def update_message(name: str, **values) -> None:
 
 
 def history_messages(session: str) -> list[dict]:
-	"""Replay persisted messages as OpenAI-format messages for the next completion."""
 	rows = frappe.get_all(
 		"Wikify Agent Message",
 		filters={"session": session},
@@ -105,7 +88,6 @@ def history_messages(session: str) -> list[dict]:
 	messages: list[dict] = []
 	for r in rows:
 		if r.status in ("error", "clarification"):
-			# Clarifications/errors aren't replayed as model turns.
 			if r.role == "user":
 				messages.append({"role": "user", "content": r.content or ""})
 			continue
@@ -133,18 +115,15 @@ def history_messages(session: str) -> list[dict]:
 
 def set_running(session: str, value: bool) -> None:
 	frappe.db.set_value("Wikify Agent Session", session, "is_running", 1 if value else 0)
-	# background agent turn — the job owns its transaction
 	# nosemgrep
 	frappe.db.commit()
 
 
 def touch(session: str, *, first_user_message: str | None = None) -> None:
-	"""Bump `last_interaction_on`; set a title from the first user message if unset."""
 	values = {"last_interaction_on": now_datetime()}
 	title = session_title(first_user_message)
 	if title and not frappe.db.get_value("Wikify Agent Session", session, "title"):
 		values["title"] = title
 	frappe.db.set_value("Wikify Agent Session", session, values)
-	# background agent turn — the job owns its transaction
 	# nosemgrep
 	frappe.db.commit()

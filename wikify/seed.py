@@ -1,25 +1,14 @@
-"""Seed data for Wikify masters.
-
-`Section Type` is the classifier taxonomy — derived bottom-up from the real manuals'
-headings (see the POC README). Seeded idempotently from both `after_install` (fresh
-sites) and a `post_model_sync` patch (existing sites on `bench migrate`). Editable
-afterward — the classifier reads whatever rows exist, so a corpus can re-derive types.
-"""
-
 from __future__ import annotations
 
 import frappe
 
 UNCATEGORIZED = "Uncategorized"
 
-# (type_name, label, color, description) — order is the display order in Explore.
-# The 11 POC types; `other` is the catch-all (is_other), always last.
 SECTION_TYPES: list[tuple[str, str, str, str]] = [
 	(
 		"staff_roles_and_responsibilities",
 		"Staff Roles & Responsibilities",
 		"#3b82f6",
-		# adjacent literals are one wrapped sentence, not a missing comma
 		# nosemgrep
 		"Job descriptions and role profiles — one section per post: purpose of the role, "
 		"duties, reporting and supervision lines, required qualifications and licences, "
@@ -29,7 +18,6 @@ SECTION_TYPES: list[tuple[str, str, str, str]] = [
 		"clinical_protocols",
 		"Clinical Protocols",
 		"#10b981",
-		# adjacent literals are one wrapped sentence, not a missing comma
 		# nosemgrep
 		"Clinical guidelines and care pathways — assessment, risk scoring, treatment steps, "
 		"escalation thresholds and review intervals for a named condition.",
@@ -38,7 +26,6 @@ SECTION_TYPES: list[tuple[str, str, str, str]] = [
 		"surgical_procedures",
 		"Surgical Procedures",
 		"#ef4444",
-		# adjacent literals are one wrapped sentence, not a missing comma
 		# nosemgrep
 		"Operative and theatre practice — surgical steps, peri-operative checklists, swab "
 		"and instrument counts, and recovery.",
@@ -47,7 +34,6 @@ SECTION_TYPES: list[tuple[str, str, str, str]] = [
 		"patient_management",
 		"Patient Management",
 		"#8b5cf6",
-		# adjacent literals are one wrapped sentence, not a missing comma
 		# nosemgrep
 		"The patient or client journey — referral, admission, triage, care planning, "
 		"monitoring, review and discharge.",
@@ -56,7 +42,6 @@ SECTION_TYPES: list[tuple[str, str, str, str]] = [
 		"medication_management",
 		"Medication Management",
 		"#f59e0b",
-		# adjacent literals are one wrapped sentence, not a missing comma
 		# nosemgrep
 		"Medicines handling — prescribing, dosing, administration, controlled drugs, "
 		"storage, repeat prescriptions and reconciliation.",
@@ -65,7 +50,6 @@ SECTION_TYPES: list[tuple[str, str, str, str]] = [
 		"administrative_policies",
 		"Administrative Policies",
 		"#64748b",
-		# adjacent literals are one wrapped sentence, not a missing comma
 		# nosemgrep
 		"Non-clinical policy sections — pay bands and salary scales, overtime, on-call and "
 		"unsocial-hours payments, pension, leave and other benefits, expenses and mileage, "
@@ -75,7 +59,6 @@ SECTION_TYPES: list[tuple[str, str, str, str]] = [
 		"equipment_and_facilities",
 		"Equipment & Facilities",
 		"#14b8a6",
-		# adjacent literals are one wrapped sentence, not a missing comma
 		# nosemgrep
 		"Devices, instruments and consumables — checks, maintenance, decontamination, "
 		"stock control, and the physical environment.",
@@ -84,7 +67,6 @@ SECTION_TYPES: list[tuple[str, str, str, str]] = [
 		"training_and_audits",
 		"Training & Audits",
 		"#ec4899",
-		# adjacent literals are one wrapped sentence, not a missing comma
 		# nosemgrep
 		"Becoming and staying competent — induction, mandatory training, competency "
 		"frameworks and sign-off, preceptorship, appraisal, and the audit and compliance cycle.",
@@ -93,7 +75,6 @@ SECTION_TYPES: list[tuple[str, str, str, str]] = [
 		"research_and_documentation",
 		"Research & Documentation",
 		"#6366f1",
-		# adjacent literals are one wrapped sentence, not a missing comma
 		# nosemgrep
 		"Evidence and record-keeping — research methods, references, forms, templates and "
 		"documentation standards.",
@@ -102,7 +83,6 @@ SECTION_TYPES: list[tuple[str, str, str, str]] = [
 		"emergency_procedures",
 		"Emergency Procedures",
 		"#f97316",
-		# adjacent literals are one wrapped sentence, not a missing comma
 		# nosemgrep
 		"Urgent response — resuscitation, emergency calls and escalation, major incident "
 		"plans and other time-critical procedures.",
@@ -111,7 +91,6 @@ SECTION_TYPES: list[tuple[str, str, str, str]] = [
 		"other",
 		"Other",
 		"#9ca3af",
-		# adjacent literals are one wrapped sentence, not a missing comma
 		# nosemgrep
 		"Organisation overviews and front matter — who the provider is, its mission and "
 		"values, its sites, the services it offers and its size (beds, list size, annual "
@@ -122,7 +101,6 @@ SECTION_TYPES: list[tuple[str, str, str, str]] = [
 
 
 def seed_section_types() -> None:
-	"""Insert any missing Section Type rows. Idempotent — never overwrites edits."""
 	for type_name, label, color, description in SECTION_TYPES:
 		if frappe.db.exists("Section Type", type_name):
 			continue
@@ -139,11 +117,6 @@ def seed_section_types() -> None:
 
 
 def seed_uncategorized_project() -> str:
-	"""Get-or-create the single default "Uncategorized" project. Idempotent.
-
-	Keyed on `is_default` (not the name) so a renamed catch-all is still found.
-	Returns the project name.
-	"""
 	existing = frappe.db.get_value("Wikify Project", {"is_default": 1}, "name")
 	if existing:
 		return existing

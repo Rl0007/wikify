@@ -1,12 +1,3 @@
-"""Whitelisted reads for the graph view (0.5 Slice 27) — flat, render-ready
-projections of the document graph (specs/0.5/01-graph-view.md §4).
-
-Node kinds: `document`, `section` (Section Type is a color channel, not a node type).
-Edge rels: `HAS_SECTION` (document → root section), `PART_OF` (section → parent),
-`REFERENCES` (Section Reference rows, weight = occurrences). `degree` counts
-REFERENCES weight only — it drives the "size by links" mode. Bulk queries only.
-"""
-
 from __future__ import annotations
 
 import frappe
@@ -14,7 +5,6 @@ from frappe import _
 
 
 def _document_graph(source_document: str) -> tuple[list[dict], list[dict]]:
-	"""(nodes, edges) for one Source Document — shared by both scopes."""
 	sd = frappe.db.get_value("Source Document", source_document, ["title", "page_count"], as_dict=True)
 	if not sd:
 		frappe.throw(_("Source Document {0} not found.").format(source_document))
@@ -73,7 +63,6 @@ def _document_graph(source_document: str) -> tuple[list[dict], list[dict]]:
 
 
 def _types_meta(nodes: list[dict]) -> list[dict]:
-	"""Legend/filter entries for the Section Types present, with per-type node counts."""
 	counts: dict[str, int] = {}
 	for n in nodes:
 		if n.get("section_type"):
@@ -91,7 +80,6 @@ def _types_meta(nodes: list[dict]) -> list[dict]:
 
 @frappe.whitelist()
 def get_document_graph(source_document: str) -> dict:
-	"""One document's graph: its node, every section, hierarchy + reference edges."""
 	nodes, edges = _document_graph(source_document)
 	return {
 		"nodes": nodes,
@@ -105,12 +93,6 @@ def get_document_graph(source_document: str) -> dict:
 
 @frappe.whitelist()
 def get_project_graph(project: str) -> dict:
-	"""Every document in a project with its full section subgraph (0.5 Slice 28).
-
-	A plain union of the per-document graphs — references are document-internal, so
-	no cross-document edges exist (yet); the cross-document signal is shared Section
-	Type colors across clusters.
-	"""
 	if not frappe.db.exists("Wikify Project", project):
 		frappe.throw(_("Project {0} not found.").format(project))
 	docs = frappe.get_all(

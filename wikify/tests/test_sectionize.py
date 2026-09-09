@@ -1,6 +1,5 @@
 # Copyright (c) 2026, BWH and contributors
 # For license information, please see license.txt
-
 import tempfile
 from pathlib import Path
 from unittest.mock import patch
@@ -17,14 +16,11 @@ from wikify.tests.test_remediate_pipeline import _MERMAID, _fake_chat
 
 
 class TestStripMarkdownFence(FrappeTestCase):
-	"""LLM parsers sometimes wrap the whole reply in a ```markdown fence."""
-
 	def test_strips_outer_markdown_fence(self):
 		table = "| a | b |\n|---|---|\n| 1 | 2 |"
 		self.assertEqual(strip_outer_markdown_fence(f"```markdown\n{table}\n```"), table)
 
 	def test_drops_commentary_after_the_fence(self):
-		# The real page-10 shape: a fenced page body followed by an LLM aside.
 		table = "| a | b |\n|---|---|\n| 1 | 2 |"
 		wrapped = f"```markdown\n{table}\n```\n\nThe table is part of the manual."
 		self.assertEqual(strip_outer_markdown_fence(wrapped), table)
@@ -38,7 +34,6 @@ class TestStripMarkdownFence(FrappeTestCase):
 		self.assertEqual(strip_outer_markdown_fence(md), md)
 
 	def test_leaves_mermaid_block_untouched(self):
-		# A genuine inner diagram fence (more than one fence) must survive verbatim.
 		page = '```mermaid\nflowchart TD\nA["x"] --> B["y"]\n```'
 		self.assertEqual(strip_outer_markdown_fence(page), page)
 
@@ -48,8 +43,6 @@ class TestStripMarkdownFence(FrappeTestCase):
 
 
 class TestSectionizer(FrappeTestCase):
-	"""Pure sectionizer logic — no DB, deterministic (the ported POC behavior)."""
-
 	def test_numbered_headings_nest_by_their_number(self):
 		pages = [
 			(1, "## 1. Introduction\nbody\n## 1.1 Scope\nscope body"),
@@ -58,24 +51,19 @@ class TestSectionizer(FrappeTestCase):
 		secs = sectionize(pages)
 		titles = [(s.title, s.level) for s in secs]
 		self.assertEqual(titles, [("1. Introduction", 1), ("1.1 Scope", 2), ("2. Procedures", 1)])
-		# Scope's hierarchy path threads through Introduction; page ranges tracked.
 		scope = secs[1]
 		self.assertEqual(scope.hierarchy_path, ["1. Introduction", "1.1 Scope"])
 		self.assertEqual(secs[2].page_start, 2)
 
 	def test_out_of_sequence_numbered_heading_is_demoted(self):
-		# "1. Eclampsia" after chapter 2 isn't a new chapter — it's a mis-read list
-		# item; it must nest under the current chapter, not restart numbering.
 		pages = [(1, "## 1. First\na\n## 2. Second\nb\n## 1. Eclampsia\nc")]
 		secs = sectionize(pages)
 		levels = {s.title: s.level for s in secs}
 		self.assertEqual(levels["1. First"], 1)
 		self.assertEqual(levels["2. Second"], 1)
-		self.assertEqual(levels["1. Eclampsia"], 2)  # demoted
+		self.assertEqual(levels["1. Eclampsia"], 2)
 
 	def test_repeated_numbered_running_header_is_merged(self):
-		# A numbered chapter heading re-emitted as a per-page running title collapses
-		# into one section spanning the page range (not one section per page).
 		pages = [
 			(1, "## 3. Surgery\nintro"),
 			(2, "## 3. Surgery\nmore on page two"),
@@ -94,8 +82,6 @@ class TestSectionizer(FrappeTestCase):
 		self.assertEqual(secs[0].level, 1)
 
 	def test_emphasis_is_stripped_from_heading_titles(self):
-		# pymupdf4llm emits bold/italic headings (`_**Verbal Orders**_`, `## **2.1 Foo**`);
-		# the wrapping markers are stripped, and numbering still drives the level.
 		pages = [
 			(1, "## _**Verbal Orders**_\nbody"),
 			(2, "## **2. Procedures**\np\n## **2.1 Scope**\nq"),
@@ -104,20 +90,16 @@ class TestSectionizer(FrappeTestCase):
 		by_title = {s.title: s.level for s in secs}
 		self.assertIn("Verbal Orders", by_title)
 		self.assertEqual(by_title["2. Procedures"], 1)
-		self.assertEqual(by_title["2.1 Scope"], 2)  # numbering recovered after strip
-		# No emphasis markers leak into any title.
+		self.assertEqual(by_title["2.1 Scope"], 2)
 		self.assertFalse(any("*" in s.title or s.title.startswith("_") for s in secs))
 
 	def test_clean_pages_strips_varying_boilerplate_before_sectionizing(self):
-		# Running footers ("Pg 2 of 2") must not survive as fake headings.
 		pages = [(1, "## 1. Intro\nbody\nPg 1 of 2"), (2, "## 2. Next\nbody\nPg 2 of 2")]
 		secs = sectionize(clean_pages(pages))
 		self.assertTrue(all("Pg" not in s.markdown for s in secs))
 		self.assertEqual([s.title for s in secs], ["1. Intro", "2. Next"])
 
 	def test_clean_pages_strips_signoff_footer_block(self):
-		# The QMS sign-off footer (a table row with >=2 sign-off phrases) plus its
-		# orphaned |---| separator are page furniture and must be removed.
 		footer = "|**Prepared by - Dr. A**|**Issued by: QMC**|**Approved by - Dr. B**|\n|---|---|---|"
 		pages = [(1, f"## 1. Intro\nreal body\n{footer}"), (2, f"## 2. Next\nmore body\n{footer}")]
 		cleaned = dict(clean_pages(pages))
@@ -129,21 +111,17 @@ class TestSectionizer(FrappeTestCase):
 		self.assertIn("more body", cleaned[2])
 
 	def test_title_is_clipped_to_the_storable_length(self):
-		# An over-length title aborted `replace_sections` mid-loop with
-		# CharacterLengthExceededError, dropping every later section (ICAI: pages 20-236).
 		long_title = "DETERMINATION OF RESIDENTIAL STATUS OF " + "HINDU UNDIVIDED FAMILY " * 8
 		secs = sectionize([(1, f"## {long_title}\nbody")])
 		self.assertLessEqual(len(secs[0].title), MAX_TITLE_LENGTH)
 		self.assertTrue(secs[0].title.endswith("…"))
 		self.assertTrue(secs[0].title.startswith("DETERMINATION OF RESIDENTIAL STATUS"))
-		self.assertNotIn(" …", secs[0].title)  # clipped on a word boundary, no dangling space
+		self.assertNotIn(" …", secs[0].title)
 
 	def test_clipped_title_fits_the_data_column(self):
-		# The loader is frappe-free, so its mirror of the Data column cap is pinned here.
 		self.assertEqual(MAX_TITLE_LENGTH, frappe.db.VARCHAR_LEN)
 
 	def test_long_titled_sections_all_reach_the_database(self):
-		# The regression that mattered: every section after the long heading survived.
 		pages = [
 			(1, "## Chapter One\nfirst"),
 			(2, f"## {'X' * 200}\nsecond"),
@@ -155,8 +133,6 @@ class TestSectionizer(FrappeTestCase):
 		self.assertEqual(max(s.page_end for s in secs), 3)
 
 	def test_running_page_header_opens_one_section_not_one_per_page(self):
-		# An unnumbered chapter header re-stamped at the top of every page is furniture
-		# after its first appearance — the body of later pages continues the open section.
 		pages = [
 			(1, "# TRANSFER PRICING\n## Arm's Length Price\nalp body"),
 			(2, "# TRANSFER PRICING\nmore alp body"),
@@ -167,11 +143,9 @@ class TestSectionizer(FrappeTestCase):
 		alp = secs[1]
 		self.assertEqual(alp.page_end, 3)
 		self.assertIn("still more alp body", alp.markdown)
-		# The header text itself is dropped, not folded into the body.
 		self.assertNotIn("TRANSFER PRICING", alp.markdown)
 
 	def test_heading_repeated_mid_page_is_not_a_running_header(self):
-		# Repetition alone isn't the signal — a genuine heading deep in the page stays.
 		pages = [
 			(page, f"## Chapter {page}\nlead in\nfiller\nfiller\n## Notes\nnote body") for page in (1, 2, 3)
 		]
@@ -183,17 +157,14 @@ class TestSectionizer(FrappeTestCase):
 		self.assertEqual(running_header_titles(pages), set())
 
 	def test_clean_pages_keeps_data_row_mentioning_approved_by_once(self):
-		# A genuine data row that merely mentions one sign-off phrase is NOT furniture.
 		table = "| Step | Status |\n|---|---|\n| Reviewed and approved by committee | done |"
 		pages = [(1, f"## 1. Audit\n{table}")]
 		cleaned = dict(clean_pages(pages))
 		self.assertIn("approved by committee", cleaned[1])
-		self.assertIn("|---|---|", cleaned[1])  # the real table separator survives
+		self.assertIn("|---|---|", cleaned[1])
 
 
 class TestEmptySectionsAreFlagged(FrappeTestCase):
-	"""A breadcrumb section with no body is indexed, but flagged out of the ranking legs."""
-
 	def test_section_without_markdown_is_chunked_as_title_only(self):
 		rows = [
 			{
@@ -218,13 +189,10 @@ class TestEmptySectionsAreFlagged(FrappeTestCase):
 		chunks = build_chunks(rows, {"SD-1": {"title": "Referencer", "project": "PRJ-1"}}, {})
 		self.assertEqual([chunk.section for chunk in chunks], ["SEC-EMPTY", "SEC-BODY"])
 		self.assertEqual([chunk.title_only for chunk in chunks], [True, False])
-		# The flagged row carries its title so a filter-mode citation still reads as something.
 		self.assertEqual(chunks[0].text, "Concessional tax rates under section 115BAC(1A)")
 
 
 class TestSectionizeIntegration(FrappeTestCase):
-	"""parse/remediate build the Source Section NestedSet tree."""
-
 	def _sections(self, sd):
 		return frappe.get_all(
 			"Source Section",
@@ -251,15 +219,12 @@ class TestSectionizeIntegration(FrappeTestCase):
 
 		secs = self._sections(sd)
 		self.assertTrue(secs, "parse produced no sections")
-		# A real top-level section exists and levels/paths are persisted.
 		roots = [s for s in secs if not s.parent_source_section]
 		self.assertTrue(roots)
 		for s in secs:
 			self.assertGreaterEqual(s.level, 1)
 			self.assertTrue(s.hierarchy_path)
-			# NestedSet bounds are well-formed.
 			self.assertLess(s.lft, s.rgt)
-		# The numbered chapters from the fixture surface as sections.
 		titles = " ".join(s.title for s in secs)
 		self.assertIn("Procedures", titles)
 
@@ -278,14 +243,12 @@ class TestSectionizeIntegration(FrappeTestCase):
 		with (
 			patch("wikify.engine.llm.has_openrouter", return_value=True),
 			patch("wikify.engine.llm.chat_completion", side_effect=_fake_chat),
-			# Cleanup keeps content (identity) so the rebuilt tree can't go empty.
 			patch("wikify.engine.remediate.clean_markdown", side_effect=lambda md, model=None: md),
 			patch("wikify.engine.remediate.vlm.parse_page_image", return_value=_MERMAID),
 		):
 			result = remediate_pdf(sd, str(path), scope="all")
 
 		after = self._sections(sd)
-		# Tree was rebuilt (fresh rows) and did NOT revert to empty/baseline-less.
 		self.assertTrue(after, "remediation left an empty tree")
 		self.assertEqual(result["sections"], len(after))
 		self.assertFalse(before & {s.name for s in after}, "old section rows not replaced")

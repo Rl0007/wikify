@@ -5,19 +5,11 @@ import threading
 import numpy as np
 
 MODEL_REPO = "cross-encoder/ms-marco-MiniLM-L6-v2"
-# Pinned: the 0-10 map below and `answer.MIN_RERANK_SCORE` are calibrated against the
-# logits THESE weights produce.
 MODEL_REVISION = "233902d25c440f23af6f7d6e94d2946bac0bee0a"
 MODEL_FILE = "onnx/model.onnx"
 TOKENIZER_FILE = "tokenizer.json"
-# Truncation does not degrade gracefully: on the 11 golden questions 512 tokens scored
-# 100% recall, 320 scored 89%, 256 scored 100%, 128 scored 81%.
 MAX_TOKENS = 512
-# Wider batches were not faster — the encoder already saturates every core.
 BATCH_SIZE = 16
-# Linear in the LOGIT, not its sigmoid, which squeezes everything short of "certainly
-# relevant" into the first thousandth — where the refusal floor has to live. Measured top
-# logits run -11.5 (unanswerable) to +0.7 (answered well).
 LOGIT_FLOOR = -12.0
 LOGIT_CEILING = 4.0
 SCORE_SCALE = 10.0
@@ -37,8 +29,6 @@ def get_model(repo: str = MODEL_REPO):
 				tokenizer = Tokenizer.from_file(
 					hf_hub_download(repo, TOKENIZER_FILE, revision=MODEL_REVISION)
 				)
-				# `only_second` truncates the candidate, never the question: a question cut in
-				# half is scored against nothing.
 				tokenizer.enable_truncation(max_length=MAX_TOKENS, strategy="only_second")
 				tokenizer.no_padding()
 				weights = hf_hub_download(repo, MODEL_FILE, revision=MODEL_REVISION)
@@ -76,8 +66,6 @@ def scores(query: str, texts: list[str], repo: str = MODEL_REPO) -> list[float]:
 
 	tokenizer, session, input_names = get_model(repo)
 	encodings = tokenizer.encode_batch([(query, text) for text in texts])
-	# Shortest-first because padding is per batch: mixing a 40-token heading in with a
-	# 512-token section makes the encoder read 512 tokens for both.
 	order = sorted(range(len(encodings)), key=lambda position: len(encodings[position].ids))
 
 	relevance = [0.0] * len(texts)

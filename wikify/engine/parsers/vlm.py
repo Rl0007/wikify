@@ -1,13 +1,3 @@
-"""Cloud VLM parser: a rendered page image -> markdown via an OpenRouter model.
-
-Used by remediation to re-parse visual / low-recall pages from their image. The
-model is a `Wikify Settings` value (`vlm_model`) so it's switchable without code.
-
-Ported from the POC `parsers/vlm_parser.py`. The page is already rendered upstream
-(`pdf_utils.render_png` -> data URL), so this takes the data URL directly — no
-on-demand re-render, no `image_to_data_url` disk round-trip.
-"""
-
 from __future__ import annotations
 
 from wikify.engine import llm, settings
@@ -52,13 +42,6 @@ def parse_page_image(
 	instruction: str = "",
 	shape_hint: str = "",
 ) -> str:
-	"""Markdown for a single page, read from its rendered image (data URL).
-
-	`shape_hint` is `regions.shape_hint` for the page — a coarse "this page holds a grid /
-	a flow" line from the deterministic layout pass. It does not tell the model where the
-	cells are (it still reads the image); it stops the model reaching for a flowchart when
-	what it is looking at is a table.
-	"""
 	preamble = context_block(project_context) + instruction_block(instruction) + shape_hint
 	resp = llm.chat_completion(
 		model or settings.get("vlm_model"),

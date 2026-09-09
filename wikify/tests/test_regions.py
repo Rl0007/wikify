@@ -1,24 +1,15 @@
 # Copyright (c) 2026, BWH and contributors
 # For license information, please see license.txt
-
-"""Per-region shape classification and the page kind derived from it.
-
-The gate this replaces was `chars < 250 AND drawings > 40`, which on a born-digital
-diagram-heavy manual never fired: 235 of 236 ICAI pages carried both a full text layer and
-heavy vector art, so every one was filed `text` and the visual path was unreachable.
-"""
-
 from __future__ import annotations
 
 import unittest
 
-import fitz  # PyMuPDF
+import fitz
 
 from wikify.engine import pdf_utils, regions
 
 
 def grid_page(doc, rows: int = 6, columns: int = 4):
-	"""A ruled grid of filled cells with a paragraph of prose above it."""
 	page = doc.new_page()
 	for line in range(6):
 		page.insert_text(
@@ -34,7 +25,6 @@ def grid_page(doc, rows: int = 6, columns: int = 4):
 
 
 def flow_page(doc):
-	"""Labelled boxes joined by connector lines — a genuine flow, not a grid."""
 	page = doc.new_page()
 	page.insert_text((72, 90), "Decision tree for opting out of the default regime.", fontsize=11)
 	for index in range(4):
@@ -74,7 +64,6 @@ class TestRegions(unittest.TestCase):
 		self.assertNotIn(regions.TABLE, shapes)
 
 	def test_a_text_page_with_heavy_art_is_mixed_not_text(self):
-		"""The regression the old AND-gate could not express."""
 		page = grid_page(self.doc)
 		self.assertGreater(len(page.get_text("text").strip()), 250)
 		self.assertEqual(pdf_utils.classify_page(page, 250, 40), "mixed")
@@ -90,8 +79,6 @@ class TestRegions(unittest.TestCase):
 		self.assertEqual(pdf_utils.classify_page(page, 250, 40), "visual")
 
 	def test_a_flow_engulfed_by_a_grid_is_not_announced_twice(self):
-		"""Connectors chain through a table's area; announcing that span as a second `flow`
-		region is exactly the hint that talks the model into a flowchart."""
 		page = grid_page(self.doc, rows=10, columns=5)
 		self.assertEqual(self.shapes(page).count(regions.FLOW), 0)
 

@@ -1,14 +1,3 @@
-"""Retrieval tool — gives the agent loop genuine multi-hop search.
-
-`semantic_search` returns ranked excerpts *with their section ids*, so the model can chain
-search → `read_section` → search again without any loop changes. The handler calls the
-whitelisted `api.rag.search`, which is where routing and the permission pre-filter already
-live; the tool re-implements nothing.
-
-Routing is off here on purpose: the model is doing the routing, so it passes
-`section_type` / `mode` itself and we don't pay for a second classifier call per hop.
-"""
-
 from __future__ import annotations
 
 from frappe import _
@@ -17,8 +6,6 @@ from wikify.agent.context import Ctx
 from wikify.agent.registry import Tool
 from wikify.rag import search as rag_search
 
-# Excerpts are trimmed hard — the model pulls the full body with read_section when a hit
-# looks worth reading.
 EXCERPT_LIMIT = 700
 
 
@@ -60,7 +47,6 @@ TOOLS = [
 	Tool(
 		name="semantic_search",
 		side="server",
-		# adjacent literals are one wrapped sentence, not a missing comma
 		# nosemgrep
 		description=(
 			"Search the indexed wiki content by meaning and by keyword, returning ranked "

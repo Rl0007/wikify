@@ -7,67 +7,27 @@ from difflib import SequenceMatcher
 
 import frappe
 
-# Token n-gram width for page attribution. Five words is long enough that a shingle is
-# effectively unique to one page of prose, short enough that a chunk of 1200 characters
-# still produces a couple of hundred of them.
 SHINGLE_SIZE = 5
 
-# A page has to carry at least this fraction of the text's shingles to be named, and it has
-# to beat the runner-up by at least this margin. Text that straddles a page break scores
-# high on the page it mostly came from and clears both bars; text that is boilerplate
-# repeated across pages clears neither and falls back to the section's page range.
 MIN_PAGE_MATCH_SCORE = 0.30
 PAGE_TIE_MARGIN = 0.10
 
-# Token-sequence similarity a fuzzy quote match must reach. A model that re-types a
-# sentence drops an article or shortens a dash; one that invents a sentence does not land
-# anywhere near this.
 MIN_QUOTE_SCORE = 0.82
 QUOTE_WINDOW_SLACK = 6
-# ponytail: a quote anchored on a token that occurs thousands of times scans that many
-# windows; capped rather than solved. Build a suffix automaton if quotes ever get long
-# enough that the rarest token is still common.
 MAX_ANCHOR_CANDIDATES = 200
 
-# Written as escapes so ruff's ambiguous-unicode rule can stay on for the rest of the app —
-# these are exactly the characters that rule exists to flag, and here they are the subject.
 DASH_CHARS = "\u2010\u2011\u2012\u2013\u2014\u2015\u2212"
 SINGLE_QUOTE_CHARS = "\u2018\u2019\u201a\u201b\u2032"
 DOUBLE_QUOTE_CHARS = "\u201c\u201d\u201e\u201f\u2033"
-# Markdown emphasis is formatting, not content: a model quoting a **bold** rate types it
-# plain, and the quote must still resolve.
 DROPPED_CHARS = frozenset("*_`#")
-# The rupee sign folds to "rs" so that "Rs. 2 crore" and "₹2 crore" share tokens.
 EXPANDED_CHARS = {"\u20b9": "rs"}
 
 TOKEN_PATTERN = re.compile(r"[0-9a-z]+")
-# The load-bearing part of a quote — the part fuzzy similarity must never be allowed to vote
-# on. Prose may wobble (a model re-typing a sentence drops an article); a figure may not,
-# because the figure is the thing the student came to check.
-#
-# Fuzzy matching is length-dependent, which makes it exactly the wrong tool here: one wrong
-# digit costs a fixed ~0.06 of the token ratio, so it sinks a short quote below the floor and
-# sails through on a long one. Measured on ICAI p.6: "@4%" retyped as "@6%" scored 0.80
-# against a 0.82 floor — rejected by luck, not by design — and "(+) surcharge" retyped as
-# "(-) surcharge" scored 0.85 and verified outright. A citation that renders as VERIFIED with
-# the wrong statutory rate in it is worse than no citation: it manufactures confidence.
-#
-# So these are compared character for character, in order, with no threshold and no tolerance:
-# any token carrying a digit (rates, "87a", "115bac", the "2"/"31" of "section 2(31)"),
-# percent signs, accounting signs ("(+)", "(-)", "-5"), the "/" of "u/s", and comparison
-# operators.
-# ponytail: a sign is only load-bearing next to a digit or inside parentheses, so a lone "-"
-# used as a dash stays free punctuation ("crore - 25%" must still match "crore | 25%");
-# tighten it if a corpus ever writes a signed figure with a space after the sign.
-# Escaped for the same reason as DASH_CHARS above: these are exactly what RUF001 flags.
 OPERATOR_CHARS = "%/=<>\u2264\u2265\u00d7\u00f7\u2260"
 FIGURE_PATTERN = re.compile(
 	f"[0-9a-z]*[0-9][0-9a-z]*|\\([+-]\\)|(?<![0-9a-z])[+-](?=[0-9])|[{OPERATOR_CHARS}]"
 )
 CITATION_MARKER = re.compile(r"\[(\d+)\]")
-# A quoted span the model attributed to a source: "...text..." optionally followed by a
-# parenthetical, then the marker. Bounded so a stray quote character cannot swallow the
-# rest of the answer.
 QUOTED_SPAN = re.compile(
 	'["\u201c]([^"\u201c\u201d\n]{15,400})["\u201d]\\s*(?:\\([^)\n]{0,60}\\))?\\s*\\[(\\d+)\\]'
 )
