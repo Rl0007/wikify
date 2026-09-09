@@ -111,6 +111,56 @@ def rebuild_pending_project(project: str) -> None:
 	frappe.db.commit()
 
 
+def section_content_changed(section_names: list[str]) -> None:
+	"""Reindex sections written through `engine.store`, which fires no doc_event.
+
+	`set_section_markdown` and the tree APIs write with `frappe.db.set_value`, so the
+	`Source Section` reindex hook never sees them — the same hole `page_content_changed`
+	closes one link further up the chain. Without this an agent or UI edit changes exactly
+	the text the index serves and the index keeps serving the old copy.
+	"""
+	if indexing_suspended() or not section_names:
+		return
+
+	sections = frappe.get_all(
+		"Source Section",
+		filters={"name": ["in", section_names]},
+		fields=["name", "source_document"],
+	)
+	documents = {row.source_document for row in sections if row.source_document}
+	if not documents:
+		return
+	projects = {
+		row.name: row.project
+		for row in frappe.get_all(
+			"Source Document", filters={"name": ["in", list(documents)]}, fields=["name", "project"]
+		)
+	}
+
+	by_project: dict[str, list[str]] = {}
+	for row in sections:
+		project = projects.get(row.source_document)
+		if project:
+			by_project.setdefault(project, []).append(row.name)
+	for project, names in by_project.items():
+		reindex_sections(project, names)
+
+
+def document_structure_changed(source_document: str) -> None:
+	"""A tree rebuild moved `hierarchy_path` under an unknown number of sections.
+
+	`hierarchy_path` is embedded into every chunk as its contextual-retrieval prefix, so a
+	rename or a reparent invalidates the whole document rather than the row that was edited.
+	Scoped to the project because that is what the index is scoped to, and coalesced, so a
+	drag that fires several rebuilds still costs one pass.
+	"""
+	if indexing_suspended() or not source_document:
+		return
+	project = frappe.db.get_value("Source Document", source_document, "project")
+	if project:
+		queue_project_rebuild(project)
+
+
 def page_content_changed(page_name: str) -> None:
 	"""Mark a page's downstream sections stale — called from `engine.store`, the write funnel.
 

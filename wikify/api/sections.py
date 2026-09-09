@@ -17,6 +17,7 @@ from frappe.query_builder import Order
 from frappe.query_builder.functions import Coalesce
 
 from wikify.engine import store
+from wikify.rag import events
 
 
 @frappe.whitelist()
@@ -115,6 +116,11 @@ def _rebuild_tree(source_document: str) -> None:
 	right = 1
 	for root in children_of(None):
 		right = walk(root, right, 1, [])
+
+	# Every path field here is written with `set_value`, which fires no doc_event, and
+	# `hierarchy_path` is the contextual prefix embedded into each chunk — so a rename or a
+	# reparent changes what the index holds for an unknown number of sections.
+	events.document_structure_changed(source_document)
 
 
 def _subtree_names(name: str) -> tuple[str, list[str]]:
@@ -258,6 +264,8 @@ def set_section_type(name: str, section_type: str | None = None) -> dict:
 	if section_type and not frappe.db.exists("Section Type", section_type):
 		frappe.throw(_("Unknown Section Type {0}.").format(section_type))
 	frappe.db.set_value("Source Section", name, "section_type", section_type, update_modified=False)
+	# The type is a filter column on every chunk, so the exhaustive leg answers from it.
+	events.section_content_changed([name])
 	return {"ok": True, "section_type": section_type}
 
 

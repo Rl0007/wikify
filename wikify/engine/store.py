@@ -323,10 +323,14 @@ def set_section_markdown(
 	controller / an explicit full-document extract instead. `extra_values` keeps
 	multi-field callers on a single UPDATE (merge writes page ranges alongside)."""
 	from wikify.engine.refs import extract_references
+	from wikify.rag import events
 
 	values = {"markdown": markdown, "lint_issues": lint_json(markdown), **(extra_values or {})}
 	frappe.db.set_value("Source Section", name, values, update_modified=update_modified)
 	extract_references(frappe.db.get_value("Source Section", name, "source_document"), [name])
+	# `set_value` fires no doc_event, so the reindex hook on Source Section never sees this
+	# write — the index would keep serving the text this call just replaced.
+	events.section_content_changed([name])
 
 
 # --- Slice 6: classification ---

@@ -22,6 +22,7 @@ from unittest.mock import patch
 import frappe
 from frappe.tests.utils import FrappeTestCase
 
+from wikify.api import sections as sections_api
 from wikify.engine import store
 from wikify.engine.loader.sectionizer import Section
 from wikify.engine.verify.harness import PageScore
@@ -272,3 +273,92 @@ class TestPagePropagation(FrappeTestCase):
 			events.reindex_sections(None, ["SEC-A"])
 
 		upsert.assert_not_called()
+
+
+class TestSectionInvalidation(FrappeTestCase):
+	"""The other half of the funnel: a section edit must not leave the index stale.
+
+	`page_content_changed` closed the page → section link. `Source Section.markdown` is
+	written the same way — `frappe.db.set_value` through `store.set_section_markdown`, which
+	fires no doc_event — so the reindex hook never saw an agent or UI edit either, and the
+	index kept serving the text the edit had just replaced.
+	"""
+
+	def setUp(self):
+		self.project = frappe.get_doc(
+			{
+				"doctype": "Wikify Project",
+				"project_name": f"Section Invalidation {frappe.generate_hash(length=6)}",
+			}
+		).insert(ignore_permissions=True)
+		self.source_document = frappe.get_doc(
+			{
+				"doctype": "Source Document",
+				"title": "Section Invalidation",
+				"page_count": 2,
+				"project": self.project.name,
+			}
+		).insert(ignore_permissions=True)
+		add_page(self.source_document.name, 1, "canonical page 1")
+		store.replace_sections(
+			self.source_document.name,
+			[
+				Section("1. Alpha", 1, ["1. Alpha"], 1, 1, "stale alpha body"),
+				Section("2. Beta", 1, ["2. Beta"], 1, 1, "stale beta body"),
+			],
+		)
+		frappe.cache().delete_value(events.pending_key(self.project.name))
+
+	def tearDown(self):
+		frappe.cache().delete_value(events.pending_key(self.project.name))
+		_cleanup._delete_document_rows(self.source_document.name)
+		frappe.db.commit()
+
+	def section_named(self, title: str) -> str:
+		return frappe.db.get_value(
+			"Source Section", {"source_document": self.source_document.name, "title": title}, "name"
+		)
+
+	def test_a_markdown_edit_reindexes_the_section_it_rewrote(self):
+		section = self.section_named("1. Alpha")
+		with invalidation_live(), patch("wikify.rag.index.upsert_sections") as upsert:
+			store.set_section_markdown(section, "surcharge slabs, repaired")
+
+		upsert.assert_called_once_with([section])
+
+	def test_retagging_a_section_reindexes_it(self):
+		"""`section_type` is a filter column on every chunk — the exhaustive leg answers from it."""
+		section = self.section_named("2. Beta")
+		with invalidation_live(), patch("wikify.rag.index.upsert_sections") as upsert:
+			sections_api.set_section_type(section, None)
+
+		upsert.assert_called_once_with([section])
+
+	def test_a_rename_rebuilds_the_project_because_it_moves_every_hierarchy_path(self):
+		section = self.section_named("1. Alpha")
+		with invalidation_live(), patch("frappe.enqueue") as enqueue:
+			sections_api.rename_section(section, "1. Alpha (revised)")
+
+		self.assertEqual(enqueue.call_args.args[0], "wikify.rag.events.rebuild_pending_project")
+		self.assertEqual(enqueue.call_args.kwargs["project"], self.project.name)
+
+	def test_a_bulk_pass_that_rebuilds_the_tree_itself_reindexes_nothing_per_section(self):
+		section = self.section_named("1. Alpha")
+		with invalidation_live(), patch("wikify.rag.index.upsert_sections") as upsert:
+			with events.suspended_indexing():
+				store.set_section_markdown(section, "written inside a bulk pass")
+
+		upsert.assert_not_called()
+
+	def test_a_section_outside_any_project_reindexes_nothing(self):
+		orphan = frappe.get_doc(
+			{"doctype": "Source Document", "title": "No Project", "page_count": 1}
+		).insert(ignore_permissions=True)
+		store.replace_sections(orphan.name, [Section("1. Orphan", 1, ["1. Orphan"], 1, 1, "body")])
+		section = frappe.db.get_value("Source Section", {"source_document": orphan.name}, "name")
+
+		with invalidation_live(), patch("wikify.rag.index.upsert_sections") as upsert:
+			store.set_section_markdown(section, "still outside any project")
+
+		upsert.assert_not_called()
+		_cleanup._delete_document_rows(orphan.name)
