@@ -26,32 +26,17 @@ from frappe.tests.utils import FrappeTestCase
 
 from wikify.engine import store as engine_store
 from wikify.engine.loader.sectionizer import Section
-from wikify.rag import chunk, index, search, store
-
-CANDIDATE_HEADER = re.compile(r"^\[(\d+)\] ", re.MULTILINE)
+from wikify.rag import chunk, index, rerank, search, store
 
 
-def candidate_ids(messages: list[dict]) -> list[int]:
-	"""The candidate numbers a rerank prompt actually offered the model."""
-	return [int(number) for number in CANDIDATE_HEADER.findall(messages[1]["content"])]
+def scores_favouring(wanted: str):
+	"""A scorer that gives the candidate whose text is `wanted` 9.0 and everything else 0.0,
+	so a `search` that quietly re-sorts by fusion score afterwards fails."""
 
+	def score(query, texts):
+		return [9.0 if text == wanted else 0.0 for text in texts]
 
-def rerank_favouring(crumb: str):
-	"""A reranker that scores the candidate whose breadcrumb is `crumb` 9.0 and everything
-	else 0.0, batch by batch — so a `search` that quietly re-sorts by fusion score fails."""
-
-	def reply(model, messages, **kwargs):
-		content = messages[1]["content"]
-		headers = [
-			(int(match.group(1)), content[match.end() : content.index("\n", match.end())])
-			for match in CANDIDATE_HEADER.finditer(content)
-		]
-		scores = [
-			{"id": number, "score": 9.0 if header.endswith(crumb) else 0.0} for number, header in headers
-		]
-		return {"choices": [{"message": {"content": frappe.as_json({"scores": scores})}}]}
-
-	return reply
+	return score
 
 
 def make_bare_hit(title: str, score: float = 0.03) -> search.Hit:
@@ -609,11 +594,8 @@ class TestRagCore(FrappeTestCase):
 			)
 
 	def test_filter_mode_does_not_pay_for_a_rerank_it_discards(self):
-		"""Filter mode re-sorts by document and page, so a rerank is a wasted LLM round-trip."""
-		with (
-			patch("wikify.engine.llm.has_openrouter", return_value=True),
-			patch("wikify.engine.llm.chat_completion") as chat_completion,
-		):
+		"""Filter mode re-sorts by document and page, so scoring the candidates is wasted work."""
+		with patch.object(rerank, "scores") as scored:
 			hits = search.search(
 				"give me all the job descriptions",
 				project=self.project.name,
@@ -624,7 +606,7 @@ class TestRagCore(FrappeTestCase):
 			)
 
 		self.assertTrue(hits)
-		chat_completion.assert_not_called()
+		scored.assert_not_called()
 		self.assertTrue(all(hit.rerank_score is None for hit in hits))
 
 	def test_rerank_reorders_and_records_the_score(self):
@@ -638,20 +620,35 @@ class TestRagCore(FrappeTestCase):
 		self.assertGreater(len(hits), 1)
 		# Score the *last* candidate highest, so a no-op reranker can't pass this.
 		wanted = hits[-1].section
-		scores = [{"id": position, "score": 1.0} for position in range(len(hits))]
-		scores[-1]["score"] = 9.0
-		response = {"choices": [{"message": {"content": frappe.as_json({"scores": scores})}}]}
+		graded = [1.0] * len(hits)
+		graded[-1] = 9.0
 
-		with (
-			patch("wikify.engine.llm.has_openrouter", return_value=True),
-			patch("wikify.engine.llm.chat_completion", return_value=response),
-		):
+		with patch.object(rerank, "scores", return_value=graded):
 			reranked = search.rerank_hits("coin", hits)
 
 		self.assertEqual(reranked[0].section, wanted)
 		self.assertEqual(reranked[0].rerank_score, 9.0)
 
-	def test_rerank_degrades_without_a_key_and_when_the_call_fails(self):
+	def test_rerank_runs_without_an_openrouter_key(self):
+		"""The scorer is local, so reranking survives a site with no LLM configured at all.
+
+		This is the opposite of the old behaviour, where an absent key skipped the rerank
+		silently and the answer quietly came back in fusion order.
+		"""
+		scope = {
+			"project": self.project.name,
+			"mode": "vector",
+			"limit": 3,
+			"allowed_projects": search.ALL_PROJECTS,
+		}
+		with patch("wikify.engine.llm.has_openrouter", return_value=False):
+			hits = search.search("coin", rerank=True, **scope)
+
+		self.assertTrue(hits)
+		self.assertTrue(all(hit.rerank_score is not None for hit in hits))
+
+	def test_rerank_degrades_to_fusion_order_when_the_scorer_fails(self):
+		"""A reranker that cannot load must cost the ordering, never the answer."""
 		scope = {
 			"project": self.project.name,
 			"mode": "vector",
@@ -660,17 +657,11 @@ class TestRagCore(FrappeTestCase):
 		}
 		order = [hit.section for hit in search.search("coin", **scope)]
 
-		with patch("wikify.engine.llm.has_openrouter", return_value=False):
-			unkeyed = search.search("coin", rerank=True, **scope)
-		self.assertEqual([hit.section for hit in unkeyed], order)
-		self.assertTrue(all(hit.rerank_score is None for hit in unkeyed))
-
-		with (
-			patch("wikify.engine.llm.has_openrouter", return_value=True),
-			patch("wikify.engine.llm.chat_completion", side_effect=RuntimeError("openrouter down")),
-		):
+		with patch.object(rerank, "scores", side_effect=RuntimeError("no model")):
 			failed = search.search("coin", rerank=True, **scope)
+
 		self.assertEqual([hit.section for hit in failed], order)
+		self.assertTrue(all(hit.rerank_score is None for hit in failed))
 
 	def test_search_returns_the_reranked_winner_not_the_fusion_winner(self):
 		"""The rerank has to survive the `limit` slice, or paying for it is theatre.
@@ -685,47 +676,38 @@ class TestRagCore(FrappeTestCase):
 		self.assertGreater(len(fusion_order), 1)
 		outsider = fusion_order[-1]
 
-		with (
-			patch("wikify.engine.llm.has_openrouter", return_value=True),
-			patch(
-				"wikify.engine.llm.chat_completion",
-				side_effect=rerank_favouring(outsider.hierarchy_path or outsider.title),
-			),
-		):
+		with patch.object(rerank, "scores", side_effect=scores_favouring(outsider.text or "")):
 			hits = search.search("coin", limit=1, rerank=True, **scope)
 
 		self.assertEqual([hit.section for hit in hits], [outsider.section])
 		self.assertEqual(hits[0].rerank_score, 9.0)
 
-	def test_the_rerank_grades_candidates_in_batches(self):
-		"""A single call over a long candidate list comes back all zeros — see
-		`search.RERANK_BATCH_SIZE`. Candidate numbers stay global across the batches."""
+	def test_every_candidate_is_scored(self):
+		"""The property the old batching existed to guarantee: no candidate goes unjudged.
+
+		An unscored candidate used to read as a confident 0 and sink below ones that were
+		genuinely worse. The local scorer is total by construction, so this pins that
+		rather than pinning how the work is divided up.
+		"""
 		hits = [make_bare_hit(f"Section {position}") for position in range(25)]
 
-		with (
-			patch("wikify.engine.llm.has_openrouter", return_value=True),
-			patch(
-				"wikify.engine.llm.chat_completion", side_effect=rerank_favouring("Section 24")
-			) as chat_completion,
-		):
-			reranked = search.rerank_hits("coin", hits)
+		reranked = search.rerank_hits("coin", hits)
 
-		self.assertEqual(chat_completion.call_count, 3)
-		# Sorted, because the batches run concurrently (`search.RERANK_MAX_WORKERS`) — what must
-		# hold is that they partition the candidate list, not the order they come back in.
-		batches = sorted(candidate_ids(call.args[1]) for call in chat_completion.call_args_list)
-		self.assertEqual(batches, [list(range(0, 10)), list(range(10, 20)), list(range(20, 25))])
-		self.assertEqual(reranked[0].title, "Section 24")
+		self.assertEqual(len(reranked), 25)
+		self.assertTrue(all(hit.rerank_score is not None for hit in reranked))
 
-	def test_a_batch_that_skips_candidates_is_dropped_whole(self):
-		"""A partial reply would leave the unscored candidates reading as a confident 0."""
+	def test_a_partial_verdict_is_dropped_whole(self):
+		"""Kept as a seam, not because the current scorer can produce this.
+
+		`rag.rerank` returns one score per candidate by construction, so a short result can
+		only come from a future scorer regressing. If one ever does, the survivors must not
+		be ranked against nothing — the whole verdict is discarded instead.
+		"""
 		hits = [make_bare_hit(f"Section {position}") for position in range(3)]
-		partial = {"choices": [{"message": {"content": frappe.as_json({"scores": [{"id": 0, "score": 9}]})}}]}
 
-		with (
-			patch("wikify.engine.llm.has_openrouter", return_value=True),
-			patch("wikify.engine.llm.chat_completion", return_value=partial),
-		):
+		self.assertFalse(search.usable_verdict({0: 9.0}, len(hits)))
+
+		with patch.object(rerank, "scores", return_value=[9.0]):
 			reranked = search.rerank_hits("coin", hits)
 
 		self.assertEqual([hit.title for hit in reranked], ["Section 0", "Section 1", "Section 2"])

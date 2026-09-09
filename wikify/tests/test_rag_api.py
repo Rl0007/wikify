@@ -22,6 +22,7 @@ from wikify.api import rag as api_rag
 from wikify.engine import settings
 from wikify.rag import answer as rag_answer
 from wikify.rag import events as rag_events
+from wikify.rag import rerank as rag_rerank
 from wikify.rag import router as rag_router
 from wikify.rag import search as rag_search
 from wikify.rag import usage as rag_usage
@@ -438,19 +439,18 @@ class TestAskCost(FrappeTestCase):
 		self.assertAlmostEqual(result["cost"], 0.0004)
 		self.assertEqual(result["prompt_tokens"], 80)
 
-	def test_the_rerank_call_is_billed_to_the_question(self):
-		reply = llm_reply_with_usage(
-			'{"scores": [{"id": 0, "score": 9}]}', cost=0.0007, prompt=400, completion=20
-		)
-		with (
-			patch("wikify.engine.llm.has_openrouter", return_value=True),
-			patch("wikify.engine.llm.chat_completion", return_value=reply),
-			rag_usage.collect() as spend,
-		):
+	def test_the_rerank_costs_the_question_nothing(self):
+		"""The reranker runs in-process, so a question is billed for routing and synthesis only.
+
+		It used to be a metered LLM call billed to the turn; this pins that the swap actually
+		removed that spend rather than merely moving where it was counted.
+		"""
+		with rag_usage.collect() as spend:
 			rag_search.rerank_hits("which roles", [make_hit()])
 
-		self.assertAlmostEqual(spend["cost"], 0.0007)
-		self.assertEqual(spend["prompt_tokens"], 400)
+		self.assertEqual(spend["cost"], 0.0)
+		self.assertEqual(spend["prompt_tokens"], 0)
+		self.assertEqual(spend["completion_tokens"], 0)
 
 	def test_one_thread_is_never_billed_for_another(self):
 		"""The web worker answers on threads, so the accumulator must not be shared."""
@@ -516,10 +516,6 @@ class TestSilentRerankFailure(FrappeTestCase):
 
 	QUESTION = "what are the slab rates under section 115BAC(1A)"
 
-	def rerank_reply(self, scores: list[float]) -> dict:
-		items = [{"id": position, "score": score} for position, score in enumerate(scores)]
-		return llm_reply(frappe.as_json({"scores": items}))
-
 	def retrieved(self, vector_score: float | None = None) -> list[Hit]:
 		return [
 			make_hit("I. INCOME TAX RATES", vector_score=vector_score),
@@ -527,10 +523,7 @@ class TestSilentRerankFailure(FrappeTestCase):
 		]
 
 	def rerank(self, scores: list[float], vector_score: float | None = None) -> list[Hit]:
-		with (
-			patch("wikify.engine.llm.has_openrouter", return_value=True),
-			patch("wikify.engine.llm.chat_completion", return_value=self.rerank_reply(scores)),
-		):
+		with patch.object(rag_rerank, "scores", return_value=scores):
 			return rag_search.rerank_hits(self.QUESTION, self.retrieved(vector_score))
 
 	def answer_over_the_rerank_path(self, scores: list[float], vector_score: float | None) -> dict:
@@ -541,8 +534,7 @@ class TestSilentRerankFailure(FrappeTestCase):
 
 		with (
 			patch.object(settings, "openrouter_key", return_value="key"),
-			patch("wikify.engine.llm.has_openrouter", return_value=True),
-			patch("wikify.engine.llm.chat_completion", return_value=self.rerank_reply(scores)),
+			patch.object(rag_rerank, "scores", return_value=scores),
 			patch.object(rag_search, "search", side_effect=retrieve_and_rerank),
 			patch.object(rag_answer, "generate", return_value="The slabs are ... [1]"),
 		):

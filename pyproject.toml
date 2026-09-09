@@ -14,6 +14,9 @@ dependencies = [
     "litellm>=1.55",        # agent LLM client (streaming tool-calling via OpenRouter)
     "lancedb>=0.36",        # embedded vector + FTS store for retrieval (no server)
     "model2vec>=0.7",       # static sentence embeddings (numpy-only; no torch)
+    "onnxruntime>=1.20",    # cross-encoder rerank on CPU (no torch, no GPU)
+    "tokenizers>=0.20",     # pair encoding for the cross-encoder
+    "huggingface-hub>=0.26", # fetches + caches the reranker weights on first use
 ]
 
 [build-system]

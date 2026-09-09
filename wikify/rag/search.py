@@ -17,13 +17,12 @@ Two rules hold across all modes:
 from __future__ import annotations
 
 import re
-from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 
 import frappe
 from frappe.utils.data import cint, flt
 
-from wikify.rag import chunk, embed, evidence, store, usage
+from wikify.rag import chunk, embed, evidence, rerank, store
 
 MODES = ("vector", "fts", "hybrid", "filter")
 FTS_COLUMN = "text"
@@ -55,29 +54,9 @@ ACL_REQUIRED = AclDecision("ACL_REQUIRED")
 CANDIDATE_MULTIPLIER = 5
 CANDIDATE_FLOOR = 50
 RERANK_CANDIDATES = 50
-RERANK_SNIPPET_CHARS = 700
-# Asked to grade a whole candidate list in one reply the classifier degenerates into a run
-# of zeros. Measured on PRJ-2026-00002: "what is the surcharge rate when total income
-# exceeds 2 crore" scored 0.0 across all 35 candidates in a single call, and found the
-# answering section at 8.0 when the same 35 candidates were graded ten at a time.
-RERANK_BATCH_SIZE = 10
-# The batches are independent HTTP POSTs, so they run concurrently and the rerank costs one
-# batch of latency rather than all of them. What may NOT cross into a pool thread is frappe:
-# `frappe.local` is unbound there, so the OpenRouter key is resolved on the calling thread and
-# each batch's usage is billed on it too (`usage` is thread-local by design — see `rag.usage`).
-# The pool is as wide as there are batches, capped: a width below the batch count costs a whole
-# extra wave, which is what a fixed 4 was doing to the 5 batches of a 50-candidate rerank.
-# ponytail: cap measured against 5 batches at ~2.3s each; revisit if RERANK_CANDIDATES grows
-# past a couple of hundred, where the cap starts serialising again and rate limits come in.
-RERANK_MAX_WORKERS = 8
-# OpenRouter's default routing is price-weighted, so parallel batches are independently sampled
-# from a provider distribution and the wall clock is set by the slowest draw. Pinning them to
-# one endpoint is what makes the pool worth having. Measured on PRJ-2026-00002, 50 candidates
-# in 5 batches, 9 runs each: unpinned 7.8s median (1.9x concurrency, 24.7s worst case), pinned
-# 2.6s (4.2x, 4.1s worst case) — and 6 of 18 unpinned runs came back as truncated JSON that
-# lost the whole verdict, against 0 of 18 pinned. `allow_fallbacks` stays on: a reranker that
-# cannot reach its preferred provider must degrade to a slower one, never fail.
-RERANK_PROVIDER = {"order": ["google-ai-studio"], "allow_fallbacks": True}
+# Everything about HOW candidates are scored — the token window, the batching, the score
+# scale — belongs to `rag.rerank`, which owns the model. This module only decides how many
+# candidates are worth scoring.
 
 RESULT_COLUMNS = [
 	"id",
@@ -346,99 +325,32 @@ def expand_to_sections(
 	return hits
 
 
-RERANK_SYSTEM_PROMPT = (
-	"You rank retrieved document sections by how well each one answers the "
-	'user question. Reply with JSON: {"scores": [{"id": <candidate number>, '
-	'"score": <0-10>}]} covering every candidate. No prose.'
-)
+def rerank_scores(query: str, hits: list[Hit]) -> dict[int, float]:
+	"""Score every candidate 0-10 for how well it answers `query`, keyed by position.
 
+	One local forward pass per candidate — see `rag.rerank`. The dict shape is kept from the
+	LLM reranker this replaced, because `rerank_hits` maps positions back onto hits and
+	`usable_verdict` reads the same values; the difference is that the scorer is now total
+	and deterministic, so the dict is always complete.
 
-def score_batch(
-	query: str,
-	hits: list[Hit],
-	offset: int,
-	model: str,
-	api_key: str = "",
-	provider: dict | None = None,
-) -> tuple[dict[int, float], dict | None]:
-	"""Score one batch of candidates 0-10, keyed by each one's position in the FULL list.
-
-	A reply that skips candidates is dropped whole: the missing ones would otherwise read as
-	an unscored 0 and outrank nothing, which is the same silent zero this batching exists to
-	prevent.
-
-	Returns the scores and the completion's usage payload rather than folding the usage in
-	here: this runs on a pool thread and `usage` is thread-local, so only the caller can bill
-	it. A dropped batch still reports its usage — the call was made and it was paid for.
+	Nothing is billed to `usage`: the model runs in-process, so a rerank costs no tokens.
 	"""
-	from wikify.engine import llm
-
-	candidates = "\n\n".join(
-		f"[{offset + position}] {hit.document_title}{chunk.CONTEXT_SEPARATOR}{hit.hierarchy_path or hit.title}\n"
-		f"{(hit.text or '')[:RERANK_SNIPPET_CHARS]}"
-		for position, hit in enumerate(hits)
-	)
-	response = llm.chat_completion(
-		model,
-		[
-			{"role": "system", "content": RERANK_SYSTEM_PROMPT},
-			{"role": "user", "content": f"Question: {query}\n\nCandidates:\n\n{candidates}"},
-		],
-		label="rag_rerank",
-		response_format={"type": "json_object"},
-		api_key=api_key,
-		provider=provider,
-	)
-	parsed = frappe.parse_json(response["choices"][0]["message"]["content"]) or {}
-	scores = {cint(item.get("id")): flt(item.get("score")) for item in parsed.get("scores") or []}
-	complete = set(range(offset, offset + len(hits))) <= set(scores)
-	return (scores if complete else {}), response.get("usage")
-
-
-def rerank_scores(query: str, hits: list[Hit], model: str) -> dict[int, float]:
-	"""Ask the cheap model to score every candidate 0-10 for answering `query`.
-
-	Graded in batches of `RERANK_BATCH_SIZE` — see the constant for the measurement that
-	forced it, and `RERANK_MAX_WORKERS` for why the batches run concurrently. The candidate
-	numbers stay global across batches so a score always maps back to the same hit.
-	"""
-	from wikify.engine import settings
-
-	api_key = settings.openrouter_key()
-	offsets = range(0, len(hits), RERANK_BATCH_SIZE)
-	with ThreadPoolExecutor(max_workers=min(len(offsets), RERANK_MAX_WORKERS)) as pool:
-		batches = list(
-			pool.map(
-				lambda offset: score_batch(
-					query,
-					hits[offset : offset + RERANK_BATCH_SIZE],
-					offset,
-					model,
-					api_key,
-					RERANK_PROVIDER,
-				),
-				offsets,
-			)
-		)
-
-	scores: dict[int, float] = {}
-	for batch_scores, batch_usage in batches:
-		usage.add(batch_usage)
-		scores.update(batch_scores)
-	return scores
+	relevance = rerank.scores(query, [hit.text or "" for hit in hits])
+	return dict(enumerate(relevance))
 
 
 def usable_verdict(scores: dict[int, float], expected: int) -> bool:
-	"""False when the reply carries no verdict at all, so it must not be read as one.
+	"""False when the scores carry no verdict at all, so they must not be read as one.
 
-	Two shapes are not verdicts. A reply that covers only part of the candidate list lost
-	whichever batch failed, so the survivors would be ranked against nothing. And one
-	identical non-zero score across every candidate is the model declining to discriminate.
+	This guard was written against an LLM reranker, whose reply could arrive short (a lost
+	batch, leaving survivors ranked against nothing) or flat (the model declining to
+	discriminate). `rag.rerank` scores each pair independently in-process, so it is total
+	and deterministic and neither shape can occur — the check is kept as the seam that
+	catches a future scorer regressing into them, not because this one does.
 
-	An all-zero reply IS a verdict — "none of these are relevant" — and is trusted as one,
-	because the false all-zeros that made this system refuse answerable questions came from
-	over-long candidate lists (see `RERANK_BATCH_SIZE`), not from the model's judgement.
-	`answer.below_floor` never lets it refuse alone: the embedding leg has to agree.
+	An all-zero result IS a verdict — every candidate's logit sat at the floor — and is
+	trusted as one. `answer.below_floor` never lets it refuse alone: the embedding leg has
+	to agree, because a reranker that mutes the product on its own fails invisibly.
 	"""
 	if len(scores) < expected:
 		return False
@@ -456,17 +368,17 @@ def rank_key(hit: Hit) -> tuple[float, float]:
 
 
 def rerank_hits(query: str, hits: list[Hit]) -> list[Hit]:
-	"""LLM rerank of the top candidates. Never fatal — the search path degrades to the
-	unreranked order when no OpenRouter key is configured, the call fails, or the reply
-	carries no verdict."""
-	from wikify.engine import llm, settings
+	"""Cross-encoder rerank of the top candidates. Never fatal — the search path degrades to
+	the unreranked order when the model cannot be loaded or the scores carry no verdict.
 
-	if not hits or not llm.has_openrouter():
+	No OpenRouter key is required any more: the scorer runs in-process, so reranking now
+	works on a site with no LLM configured at all, where it used to be skipped silently."""
+	if not hits:
 		return hits
 
 	head, tail = hits[:RERANK_CANDIDATES], hits[RERANK_CANDIDATES:]
 	try:
-		scores = rerank_scores(query, head, settings.get("classifier_model"))
+		scores = rerank_scores(query, head)
 	except Exception:
 		frappe.log_error(title="RAG rerank failed", message=frappe.get_traceback())
 		return hits
