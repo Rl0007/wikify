@@ -90,6 +90,8 @@ class TestPagePropagation(FrappeTestCase):
 	def tearDown(self):
 		self.clear_markers()
 		_cleanup._delete_document_rows(self.source_document.name)
+		# test setup must be visible to the worker connection
+		# nosemgrep
 		frappe.db.commit()
 
 	def clear_markers(self):
@@ -312,6 +314,8 @@ class TestSectionInvalidation(FrappeTestCase):
 	def tearDown(self):
 		frappe.cache().delete_value(events.pending_key(self.project.name))
 		_cleanup._delete_document_rows(self.source_document.name)
+		# test setup must be visible to the worker connection
+		# nosemgrep
 		frappe.db.commit()
 
 	def section_named(self, title: str) -> str:

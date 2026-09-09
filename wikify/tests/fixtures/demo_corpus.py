@@ -1554,6 +1554,8 @@ def seed_demo_corpus() -> dict:
 			store.replace_sections(source_document, sections)
 		generate_wiki(source_document, wiki_space=space)
 
+	# test setup must be visible to the worker connection
+	# nosemgrep
 	frappe.db.commit()
 	return inventory()
 

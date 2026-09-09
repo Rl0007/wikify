@@ -38,6 +38,7 @@ import time
 from datetime import datetime
 
 import frappe
+from frappe import _
 
 from wikify.rag import answer as rag_answer
 from wikify.rag import search as rag_search
@@ -265,6 +266,8 @@ def demo_project() -> str:
 	"""The Demo Corpus project name. Autonames are not stable across sites, so look it up."""
 	project = frappe.db.get_value("Wikify Project", {"project_name": DEMO_PROJECT_NAME}, "name")
 	if not project:
+		# a bench instruction for the developer running the eval harness, not a user-facing message
+		# nosemgrep
 		frappe.throw(
 			f"No Wikify Project named '{DEMO_PROJECT_NAME}'. Seed it first: "
 			"bench --site <site> execute wikify.tests.fixtures.demo_corpus.seed_demo_corpus"
@@ -468,7 +471,7 @@ def compare_query(query: str, project: str | None = None, k: int = DEFAULT_K) ->
 	"""
 	query = (query or "").strip()
 	if not query:
-		frappe.throw("Enter a query to compare.")
+		frappe.throw(_("Enter a query to compare."))
 	project = project or demo_project()
 
 	comparison = rag_answer.compare(query, project, rag_search.ALL_PROJECTS, naive_limit=k, top_k=k)
@@ -589,6 +592,8 @@ def leg_cell(leg: dict | None, mode: str, scored: bool = True) -> str:
 		)
 	pieces = [
 		bar(leg["recall"], mode),
+		# adjacent literals are one wrapped sentence, not a missing comma
+		# nosemgrep
 		f'<div class="metric">recall <b>{percent(leg["recall"])}</b> · '
 		f"precision <b>{percent(leg['precision'])}</b> · "
 		f"{leg['correct_count']}/{leg['correct_count'] + len(leg['missed'])} sources · "
@@ -691,6 +696,8 @@ def summary_cards(results: dict) -> str:
 		),
 	]
 	return "".join(
+		# adjacent literals are one wrapped sentence, not a missing comma
+		# nosemgrep
 		f'<div class="card"><div class="label">{escape(label)}</div>'
 		f'<div class="value {tone}">{value}</div><div class="foot">{escape(foot)}</div></div>'
 		for label, value, foot, tone in cards
@@ -734,6 +741,8 @@ def scorecard_path() -> str:
 def write_scorecard(results: dict, path: str | None = None) -> str:
 	path = path or scorecard_path()
 	os.makedirs(os.path.dirname(path), exist_ok=True)
+	# path is built from frappe.get_app_path, not from request input
+	# nosemgrep
 	with open(path, "w", encoding="utf-8") as scorecard:
 		scorecard.write(render_scorecard(results))
 	return path

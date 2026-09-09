@@ -28,6 +28,8 @@ def _finalized(delete_fn) -> None:
 	"""
 	frappe.db.rollback()
 	delete_fn()
+	# test setup must be visible to the worker connection
+	# nosemgrep
 	frappe.db.commit()
 
 

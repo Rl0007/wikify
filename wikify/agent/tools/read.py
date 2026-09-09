@@ -335,6 +335,8 @@ TOOLS = [
 	Tool(
 		name="read_tree",
 		side="server",
+		# adjacent literals are one wrapped sentence, not a missing comma
+		# nosemgrep
 		description=(
 			"Read the Source Section tree (titles, section types, page ranges, hierarchy, "
 			"and each section's id) of a document. Defaults to the document the user is "
@@ -384,6 +386,8 @@ TOOLS = [
 	Tool(
 		name="read_rendered_preview",
 		side="server",
+		# adjacent literals are one wrapped sentence, not a missing comma
+		# nosemgrep
 		description=(
 			"Read what the user's wiki preview renders for a section — the content after "
 			"empty-group rollup and page-ref resolution. ALWAYS verify content fixes with this "
@@ -401,6 +405,8 @@ TOOLS = [
 	Tool(
 		name="read_wiki_page",
 		side="server",
+		# adjacent literals are one wrapped sentence, not a missing comma
+		# nosemgrep
 		description=(
 			"Read the GENERATED wiki page (Wiki Document) for a section, with a staleness note "
 			"when it differs from the section's current content. Use to check whether a content "
@@ -425,6 +431,8 @@ TOOLS = [
 	Tool(
 		name="search_sections",
 		side="server",
+		# adjacent literals are one wrapped sentence, not a missing comma
+		# nosemgrep
 		description=(
 			"Find sections across documents by Section Type (Explore-style). Optionally scope "
 			"to a project or the attached document, and narrow with a title/path `query`. "

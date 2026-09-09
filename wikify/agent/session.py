@@ -133,6 +133,8 @@ def history_messages(session: str) -> list[dict]:
 
 def set_running(session: str, value: bool) -> None:
 	frappe.db.set_value("Wikify Agent Session", session, "is_running", 1 if value else 0)
+	# background agent turn — the job owns its transaction
+	# nosemgrep
 	frappe.db.commit()
 
 
@@ -143,4 +145,6 @@ def touch(session: str, *, first_user_message: str | None = None) -> None:
 	if title and not frappe.db.get_value("Wikify Agent Session", session, "title"):
 		values["title"] = title
 	frappe.db.set_value("Wikify Agent Session", session, values)
+	# background agent turn — the job owns its transaction
+	# nosemgrep
 	frappe.db.commit()

@@ -75,6 +75,8 @@ def rebuild_pending_project(project: str) -> None:
 
 	frappe.cache().delete_value(pending_key(project))
 	rebuild_project(project)
+	# background reindex — the job owns its transaction
+	# nosemgrep
 	frappe.db.commit()
 
 
@@ -209,6 +211,8 @@ def propagate_pages(source_document: str, pages: list[int]) -> None:
 	except Exception:
 		requeue_page_propagation(source_document, pages)
 		raise
+	# background reindex — the job owns its transaction
+	# nosemgrep
 	frappe.db.commit()
 
 
