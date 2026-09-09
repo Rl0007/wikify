@@ -18,13 +18,11 @@ const projectOptions = useProjectOptions();
 const isNarrow = useIsNarrow();
 
 const {
-	question,
 	project,
 	turns,
 	streaming,
 	sessionCost,
 	conversationId,
-	ask,
 	retryLastTurn,
 	newConversation,
 	sessions,
@@ -115,25 +113,6 @@ watch(
 	}
 );
 
-// Openers for a reader who has nothing to type yet. They live inside the empty state, so
-// the first turn retires them on its own.
-//
-// Each one is measured against the live index rather than guessed: retrieval applies a
-// relevance floor, and a suggestion the wiki answers with "not in this wiki" is worse than
-// no suggestion at all. Questions *about* the wiki retrieve badly — "Summarise the key
-// sections" (rerank 2.8), "What is still open or unresolved?" (1.7) and "What are the main
-// topics?" (2.7) all sat under the 3.0 floor. Questions *of* it clear the floor easily:
-// these three measured 4.3, filter-mode (no floor) and 6.1.
-// ponytail: measured on this corpus, so a very different one could drift under the floor
-// again; re-probe from the eval harness if the suggestions start refusing.
-const SAMPLE_QUESTIONS = ["Give me an overview", "List the main sections", "What are the rules?"];
-
-function askSample(text) {
-	if (streaming.value) return;
-	question.value = text;
-	ask();
-}
-
 // The landing greeting. Read once at setup rather than on a clock: a tab left open past
 // midnight showing the evening greeting is a smaller cost than a timer that exists only to
 // relabel a heading nobody is looking at.
@@ -164,9 +143,9 @@ watch(conversationId, (id) => {
 });
 
 // The other direction: a deep link on load, and the back/forward buttons after it.
-// A deep link arrives with no turns loaded, so without this flag the landing — greeting,
-// composer, suggestions — paints for the length of the fetch and is then replaced by the
-// thread. That flash reads as "new chat", the opposite of what the link said.
+// A deep link arrives with no turns loaded, so without this flag the landing — greeting and
+// composer — paints for the length of the fetch and is then replaced by the thread. That
+// flash reads as "new chat", the opposite of what the link said.
 const restoringSession = ref(false);
 
 watch(
@@ -246,23 +225,10 @@ watch(
 
 					<AskComposer class="w-full max-w-3xl" :pinned="false" />
 
-					<div class="flex flex-col items-center gap-3">
-						<div class="flex flex-wrap justify-center gap-2">
-							<button
-								v-for="sample in SAMPLE_QUESTIONS"
-								:key="sample"
-								type="button"
-								class="rounded-full border border-outline-gray-1 px-3 py-1 text-xs text-ink-gray-4 transition-colors hover:border-outline-gray-2 hover:bg-surface-gray-2 hover:text-ink-gray-6"
-								@click="askSample(sample)"
-							>
-								{{ sample }}
-							</button>
-						</div>
-						<p class="max-w-lg text-center text-xs text-ink-gray-4">
-							Every answer cites the sections it came from. Follow-up questions keep
-							the thread.
-						</p>
-					</div>
+					<p class="max-w-lg text-center text-xs text-ink-gray-4">
+						Every answer cites the sections it came from. Follow-up questions keep the
+						thread.
+					</p>
 				</div>
 
 				<template v-else>
