@@ -11,7 +11,7 @@ import {
 import { computed, onMounted, ref, watch } from "vue";
 import { useRoute } from "vue-router";
 import { useTheme } from "@/utils/useTheme";
-import { useIsMobile } from "@/composables/useIsMobile";
+import { useIsMobile } from "@/composables/useMediaQuery";
 import { session } from "@/data/session";
 import AgentChatPanel from "@/components/AgentChatPanel.vue";
 import AppSettingsDialog from "@/components/AppSettingsDialog.vue";
@@ -24,6 +24,9 @@ const BUG_REPORT_URL = "https://github.com/bwhtech/wikify/issues/new";
 
 const settingsOpen = ref(false);
 const mobileMenuOpen = ref(false);
+// The agent panel + its floating button are mounted once here so they're available on
+// every screen (slice 12). On mobile the floating button is replaced by a MobileNav tab.
+const agentOpen = ref(false);
 
 const menuItems = computed(() => [
 	{
@@ -58,37 +61,40 @@ const header = computed(() => ({
 const PROJECT_ROUTES = ["Projects", "ProjectDetail", "ProjectSettings", "ImportDetail"];
 const projectsActive = computed(() => PROJECT_ROUTES.includes(route.name));
 
-const sections = computed(() => [
+// One list of destinations drives the desktop sidebar AND the mobile navigation, so a
+// screen can never be reachable on one and unreachable on the other.
+const destinations = computed(() => [
 	{
-		label: "",
-		items: [
-			{
-				label: "Projects",
-				icon: "lucide-folder",
-				to: { name: "Projects" },
-				isActive: projectsActive.value,
-			},
-			{
-				label: "Explore",
-				icon: "lucide-shapes",
-				to: { name: "Explore" },
-				isActive: route.name === "Explore",
-			},
-		],
+		label: "Projects",
+		icon: "lucide-folder",
+		to: { name: "Projects" },
+		isActive: projectsActive.value,
+	},
+	{
+		label: "Explore",
+		icon: "lucide-shapes",
+		to: { name: "Explore" },
+		isActive: route.name === "Explore",
+	},
+	{
+		label: "Ask",
+		icon: "lucide-message-circle-question",
+		to: { name: "AskWiki" },
+		isActive: route.name === "AskWiki",
 	},
 ]);
 
+const sections = computed(() => [{ label: "", items: destinations.value }]);
+
 // Full-height, multi-pane routes own their own scroll (graph canvas, split review,
 // tabbed import). Everything else scrolls as one page inside the shell's scroll area.
-const FIXED_HEIGHT_ROUTES = ["Explore", "ProjectGraph", "ImportGraph"];
+// Ask owns its scrolling: the transcript scrolls, the composer under it does not.
+const FIXED_HEIGHT_ROUTES = ["Explore", "ProjectGraph", "ImportGraph", "AskWiki"];
 const pageScroll = computed(() => !FIXED_HEIGHT_ROUTES.includes(route.name));
+const onAskPage = computed(() => route.name === "AskWiki");
 
 const collapsed = ref(localStorage.getItem("sidebar-collapsed") === "true");
 watch(collapsed, (v) => localStorage.setItem("sidebar-collapsed", v));
-
-// The agent panel + its floating button are mounted once here so they're available on
-// every screen (slice 12). On mobile the floating button is replaced by a MobileNav tab.
-const agentOpen = ref(false);
 
 function runMenuItem(item) {
 	mobileMenuOpen.value = false;
@@ -118,6 +124,12 @@ onMounted(initializeTheme);
 						icon="lucide-shapes"
 						:to="{ name: 'Explore' }"
 						:active="route.name === 'Explore'"
+					/>
+					<MobileNavItem
+						label="Ask"
+						icon="lucide-message-circle-question"
+						:to="{ name: 'AskWiki' }"
+						:active="route.name === 'AskWiki'"
 					/>
 					<MobileNavItem
 						label="Assistant"
@@ -173,9 +185,13 @@ onMounted(initializeTheme);
 			</div>
 		</BottomSheet>
 
-		<!-- Floating assistant button (desktop only — mobile uses the nav tab). -->
+		<!-- Floating assistant button (desktop only — mobile uses the nav tab). It sits
+		     bottom-right, which on any screen narrower than desktop would sit on top of
+		     card actions like "Open in wiki"; the `!isMobile` guard is what keeps it clear.
+		     Ask hides it outright: it lands on that page's composer, and a second chat
+		     entry point beside a chat is a coin-flip over which one answers. -->
 		<Button
-			v-if="!isMobile"
+			v-if="!isMobile && !onAskPage"
 			v-show="!agentOpen"
 			variant="solid"
 			icon="lucide-sparkles"

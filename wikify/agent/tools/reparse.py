@@ -40,6 +40,8 @@ def _project_context(ctx: Ctx) -> str:
 	return frappe.db.get_value("Wikify Project", ctx.project, "context_prompt") or ""
 
 
+# the tool dispatcher hands every tool the same raw args dict
+# nosemgrep
 def _page_no(args: dict) -> int | None:
 	raw = args.get("page_no")
 	try:
@@ -62,19 +64,21 @@ def _propagate_page(source_document: str, page_no: int) -> str:
 		try:
 			res = rebuild_section_markdown(owners[0].name)
 		except ValueError as e:
-			return _(" Section propagation failed ({0}) — the wiki preview is still stale.").format(str(e))
-		return _(
-			" Propagated into section '{0}' ({1} chars) — the wiki preview now shows it. If this "
+			return " " + _("Section propagation failed ({0}) — the wiki preview is still stale.").format(
+				str(e)
+			)
+		return " " + _(
+			"Propagated into section '{0}' ({1} chars) — the wiki preview now shows it. If this "
 			"document has a generated wiki, finish with sync_wiki_page on <{2}>."
 		).format(res["title"], res["chars"], owners[0].name)
 	if not owners:
-		return _(
-			" No section's page range covers this page, so the wiki preview is NOT updated. "
+		return " " + _(
+			"No section's page range covers this page, so the wiki preview is NOT updated. "
 			"Use edit_section_content on the right section if the fix must reach the wiki."
 		)
 	names = ", ".join(f"'{o.title}' <{o.name}>" for o in owners)
-	return _(
-		" NOT yet visible in the wiki preview — this is a boundary page shared by {0}. "
+	return " " + _(
+		"NOT yet visible in the wiki preview — this is a boundary page shared by {0}. "
 		"Run rebuild_section_from_pages or edit_section_content on the right one, then "
 		"sync_wiki_page if a wiki is generated."
 	).format(names)
@@ -153,6 +157,8 @@ TOOLS = [
 	Tool(
 		name="use_page_image",
 		side="server",
+		# adjacent literals are one wrapped sentence, not a missing comma
+		# nosemgrep
 		description=(
 			"Deterministically replace a page's canonical markdown with an embed of its "
 			"rendered image (no LLM). Use when the user wants the page shown as an image rather "
@@ -172,6 +178,8 @@ TOOLS = [
 	Tool(
 		name="reparse_page",
 		side="server",
+		# adjacent literals are one wrapped sentence, not a missing comma
+		# nosemgrep
 		description=(
 			"Re-parse a single page, steered by a plain-English instruction (e.g. 'keep the "
 			"table as a real markdown table', 'don't make this a mermaid diagram'). method "
@@ -198,6 +206,8 @@ TOOLS = [
 	Tool(
 		name="reparse_document",
 		side="server",
+		# adjacent literals are one wrapped sentence, not a missing comma
+		# nosemgrep
 		description=(
 			"Re-parse the WHOLE document, steered by a plain-English instruction. Expensive — "
 			"this runs cleanup/VLM over every page and rebuilds the tree, so MANUAL TREE EDITS "

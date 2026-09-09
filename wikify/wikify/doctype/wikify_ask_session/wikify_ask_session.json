@@ -1,0 +1,137 @@
+{
+ "actions": [],
+ "allow_rename": 0,
+ "autoname": "naming_series:",
+ "creation": "2026-08-10 00:00:00",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "naming_series",
+  "title",
+  "user",
+  "column_break_meta",
+  "project",
+  "started_at",
+  "totals_section",
+  "message_count",
+  "total_tokens",
+  "column_break_totals",
+  "total_cost"
+ ],
+ "fields": [
+  {
+   "default": "ASK-.YYYY.-.#####",
+   "fieldname": "naming_series",
+   "fieldtype": "Select",
+   "hidden": 1,
+   "label": "Naming Series",
+   "options": "ASK-.YYYY.-.#####"
+  },
+  {
+   "description": "Taken from the first question of the conversation; editable.",
+   "fieldname": "title",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Title"
+  },
+  {
+   "description": "Denormalized from owner so the eval set can group by asker without a join.",
+   "fieldname": "user",
+   "fieldtype": "Link",
+   "in_standard_filter": 1,
+   "label": "User",
+   "options": "User",
+   "read_only": 1
+  },
+  {
+   "fieldname": "column_break_meta",
+   "fieldtype": "Column Break"
+  },
+  {
+   "description": "The project the conversation was scoped to, if any.",
+   "fieldname": "project",
+   "fieldtype": "Link",
+   "in_standard_filter": 1,
+   "label": "Project",
+   "options": "Wikify Project"
+  },
+  {
+   "fieldname": "started_at",
+   "fieldtype": "Datetime",
+   "label": "Started At",
+   "read_only": 1
+  },
+  {
+   "fieldname": "totals_section",
+   "fieldtype": "Section Break",
+   "label": "Totals"
+  },
+  {
+   "default": "0",
+   "fieldname": "message_count",
+   "fieldtype": "Int",
+   "in_list_view": 1,
+   "label": "Message Count",
+   "non_negative": 1,
+   "read_only": 1
+  },
+  {
+   "default": "0",
+   "description": "Prompt + completion tokens across every leg of every ask in this conversation.",
+   "fieldname": "total_tokens",
+   "fieldtype": "Int",
+   "label": "Total Tokens",
+   "non_negative": 1,
+   "read_only": 1
+  },
+  {
+   "fieldname": "column_break_totals",
+   "fieldtype": "Column Break"
+  },
+  {
+   "default": "0",
+   "description": "Cumulative LLM spend (USD) for this conversation: routing + rerank + synthesis.",
+   "fieldname": "total_cost",
+   "fieldtype": "Float",
+   "in_list_view": 1,
+   "label": "Total Cost (USD)",
+   "non_negative": 1,
+   "precision": "6",
+   "read_only": 1
+  }
+ ],
+ "index_web_pages_for_search": 1,
+ "links": [],
+ "modified": "2026-08-10 00:00:00",
+ "modified_by": "Administrator",
+ "module": "Wikify",
+ "name": "Wikify Ask Session",
+ "naming_rule": "By \"Naming Series\" field",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "create": 1,
+   "delete": 1,
+   "if_owner": 1,
+   "read": 1,
+   "role": "All",
+   "write": 1
+  }
+ ],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": [],
+ "title_field": "title"
+}

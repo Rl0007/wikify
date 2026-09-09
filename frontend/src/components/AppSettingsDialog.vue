@@ -235,3 +235,25 @@ const activeTab = ref(TABS[0].value);
 		</SettingsContent>
 	</SettingsDialog>
 </template>
+
+<!--
+	frappe-ui's SettingsDialog pins its panel to `sm:min-h-[560px]`, which beats the
+	`h-[min(860px,calc(100vh-8rem))]` on the same element once the viewport is shorter than
+	688px (560 + the 8rem of margin). The panel then runs past the bottom of the screen and
+	clips its own header — the Save button and the panel title go with it — with nothing
+	scrolling to bring them back. Measured at a 577px viewport: 560px tall from y=48, so
+	31px overflows.
+
+	The floor is unreachable from the outside: it sits on a TabsRoot inside the component,
+	there is no prop for it, and the dialog teleports to <body> so a scoped rule cannot
+	reach it either. Hence a plain rule, narrowed to the settings panel and to the viewports
+	that cannot afford the floor. Delete it once frappe-ui makes that min-height
+	viewport-aware; the `h-` on the same element already computes the right size.
+-->
+<style>
+@media (min-width: 640px) and (max-height: 688px) {
+	[role="dialog"] [data-orientation="vertical"] {
+		min-height: 0;
+	}
+}
+</style>

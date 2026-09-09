@@ -3,17 +3,20 @@
 // MarkdownPreview. The HTML comes from the backend (`api.wiki.render_section_preview`),
 // which renders with the *same* renderer the wiki uses (markdown-it-py), so this preview
 // matches the eventual generated Wiki Document page. We only post-process ```mermaid
-// fences into SVG client-side via the shared wiki mermaid loader (same as today).
+// fences into SVG client-side via the shared mermaid util.
 import { computed, onMounted, onUnmounted, ref, watch, nextTick } from "vue";
-import { Badge, TabButtons, useCall } from "frappe-ui";
+import { Badge, Button, TabButtons, useCall } from "frappe-ui";
 import { CodeEditor } from "frappe-ui/code-editor";
 import { renderMermaidIn } from "@/utils/mermaid";
 import { useSocket } from "@/socket";
 
 const props = defineProps({
 	section: { type: String, default: null },
+	// Set by a parent that drilled down into this preview instead of showing it beside
+	// the tree, so the user has a way back to the list.
+	showBack: { type: Boolean, default: false },
 });
-const emit = defineEmits(["navigate"]);
+const emit = defineEmits(["navigate", "back"]);
 
 const preview = useCall({
 	url: "/api/v2/method/wikify.api.wiki.render_section_preview",
@@ -50,7 +53,7 @@ const lintSummary = computed(() =>
 const container = ref(null);
 async function renderDiagrams() {
 	await nextTick();
-	renderMermaidIn(container.value);
+	await renderMermaidIn(container.value);
 }
 watch([() => data.value?.html, mode], renderDiagrams);
 
@@ -76,16 +79,30 @@ function onBodyClick(e) {
 		</p>
 		<template v-else-if="data">
 			<!-- Breadcrumb + Rendered/Source toggle -->
-			<div class="flex items-center gap-2 border-b border-outline-gray-1 px-4 py-2">
+			<div
+				class="flex flex-wrap items-center gap-2 border-b border-outline-gray-1 px-4 py-2"
+			>
+				<Button
+					v-if="showBack"
+					size="sm"
+					variant="ghost"
+					icon="lucide-arrow-left"
+					aria-label="Back to sections"
+					@click="emit('back')"
+				/>
 				<nav class="flex min-w-0 flex-1 items-center gap-1 text-xs text-ink-gray-5">
+					<!-- A four-deep trail truncates to "I › 86… › P… › RAT…" at phone width,
+					     which says nothing — narrow screens keep only the current section. -->
 					<template v-for="(crumb, i) in data.breadcrumb" :key="i">
-						<span v-if="i" class="text-ink-gray-3" aria-hidden="true">›</span>
+						<span v-if="i" class="hidden text-ink-gray-3 lg:inline" aria-hidden="true"
+							>›</span
+						>
 						<span
 							class="truncate"
 							:class="
 								i === data.breadcrumb.length - 1
 									? 'font-medium text-ink-gray-7'
-									: ''
+									: 'hidden lg:inline'
 							"
 							>{{ crumb }}</span
 						>
@@ -128,7 +145,10 @@ function onBodyClick(e) {
 
 			<div class="min-h-0 flex-1 overflow-auto">
 				<!-- Rendered wiki page frame -->
-				<article v-if="mode === 'rendered'" class="mx-auto max-w-3xl px-6 py-6">
+				<article
+					v-if="mode === 'rendered'"
+					class="mx-auto max-w-3xl px-4 py-5 sm:px-6 sm:py-6"
+				>
 					<h1 class="mb-4 text-xl-semibold text-ink-gray-9">
 						{{ data.title }}
 					</h1>
@@ -157,20 +177,22 @@ function onBodyClick(e) {
 </template>
 
 <style>
-.wiki-preview-body .mermaid-figure {
-	display: flex;
-	justify-content: center;
-	overflow-x: auto;
-	margin: 1rem 0;
-}
-.wiki-preview-body .mermaid-figure svg {
-	max-width: 100%;
-	height: auto;
-}
 /* Approximate the wiki's table chrome so preview ≈ published page. */
 .wiki-preview-body table {
 	width: 100%;
 	border-collapse: collapse;
+}
+
+/* The ICAI pages emit rowspan/colspan tables far wider than a phone. Below the split
+   breakpoint each table becomes its own horizontal scroller so the surrounding prose
+   never widens with it; wide viewports keep the full-width table they already had. */
+@media (max-width: 1023px) {
+	.wiki-preview-body table {
+		display: block;
+		width: max-content;
+		max-width: 100%;
+		overflow-x: auto;
+	}
 }
 .wiki-preview-body th,
 .wiki-preview-body td {

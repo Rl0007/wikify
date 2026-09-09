@@ -121,6 +121,8 @@ def _attach_pdf(fx: Fixture) -> str:
 	imp.insert(ignore_permissions=True)
 	f = save_file(f"eval-{fx.sd}.pdf", content, "Wikify Import", imp.name, is_private=1)
 	imp.db_set("pdf", f.file_url)
+	# test setup must be visible to the worker connection
+	# nosemgrep
 	frappe.db.commit()
 	return imp.name
 
@@ -161,6 +163,8 @@ def boundary_no_guess(keep: bool = False) -> dict:
 	# Make page 4 a boundary page: PROFILE spans 3-4, PROCEDURES stays 4-4.
 	profile = fx.sections()["1. DEPARTMENTAL PROFILE"].name
 	frappe.db.set_value("Source Section", profile, "page_end", 4, update_modified=False)
+	# test setup must be visible to the worker connection
+	# nosemgrep
 	frappe.db.commit()
 	before = fx.snapshot()
 	turn = run_turn(fx, "Page 4 of the PDF was parsed badly — re-parse it.")

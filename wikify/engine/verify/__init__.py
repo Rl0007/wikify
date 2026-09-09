@@ -8,6 +8,6 @@ the I/O boundaries move (judge calls `engine.llm`, thresholds come from
 
 from __future__ import annotations
 
-from wikify.engine.verify.harness import PageScore, score_page
+from wikify.engine.verify.harness import PageScore, get_verdict, score_page
 
-__all__ = ["PageScore", "score_page"]
+__all__ = ["PageScore", "get_verdict", "score_page"]

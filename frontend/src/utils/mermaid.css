@@ -1,0 +1,32 @@
+/* Presentation for the blocks `renderMermaidIn` swaps into a preview. Lives with the
+   util so MarkdownPreview and WikiPreview share one definition instead of two copies. */
+
+.mermaid-figure {
+	display: flex;
+	justify-content: center;
+	overflow-x: auto;
+	margin: 1rem 0;
+}
+
+.mermaid-figure svg {
+	max-width: 100%;
+	height: auto;
+}
+
+/* Failure state: the chip explains it, the source stays readable underneath. */
+.mermaid-figure-failed {
+	flex-direction: column;
+	align-items: flex-start;
+	gap: 0.5rem;
+}
+
+.mermaid-figure-failed .mermaid-error-chip {
+	margin: 0;
+}
+
+.mermaid-figure-failed .mermaid-error-source {
+	width: 100%;
+	margin: 0;
+	overflow-x: auto;
+	white-space: pre;
+}

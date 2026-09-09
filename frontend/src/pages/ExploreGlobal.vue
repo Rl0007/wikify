@@ -65,17 +65,16 @@ function pageRange(s) {
 	<div class="flex h-full flex-col">
 		<PageHeader>
 			<div class="flex min-w-0 items-center gap-3">
-				<h1 class="text-md text-ink-gray-9">Explore</h1>
-				<span class="truncate text-sm text-ink-gray-5"
+				<h1 class="shrink-0 text-md text-ink-gray-9">Explore</h1>
+				<span class="hidden truncate text-sm text-ink-gray-5 lg:block"
 					>Sections by type across documents</span
 				>
 			</div>
-			<FormControl
-				v-model="selectedProject"
-				type="select"
-				:options="projectOptions"
-				class="w-48"
-			/>
+			<!-- FormControl puts its class on an inner element, so the width lives on a
+			     wrapper — without it the select takes the whole header row. -->
+			<div class="w-36 shrink-0 sm:w-48">
+				<FormControl v-model="selectedProject" type="select" :options="projectOptions" />
+			</div>
 		</PageHeader>
 
 		<!-- Empty state: nothing classified anywhere yet -->
@@ -92,16 +91,21 @@ function pageRange(s) {
 			</p>
 		</div>
 
-		<div v-else class="flex min-h-0 flex-1">
-			<!-- Type rail -->
-			<aside class="w-60 shrink-0 overflow-auto border-r border-outline-gray-1 p-2">
-				<p class="px-2 py-1.5 text-xs font-medium tracking-wide text-ink-gray-5 uppercase">
+		<div v-else class="flex min-h-0 flex-1 flex-col lg:flex-row">
+			<!-- Type rail — a vertical rail beside the results on wide screens, a
+			     horizontally scrolling strip above them when there's no room for one. -->
+			<aside
+				class="flex shrink-0 gap-1 overflow-x-auto border-b border-outline-gray-1 p-2 lg:w-60 lg:flex-col lg:overflow-x-visible lg:overflow-y-auto lg:border-r lg:border-b-0"
+			>
+				<p
+					class="hidden px-2 py-1.5 text-xs font-medium tracking-wide text-ink-gray-5 uppercase lg:block"
+				>
 					Types
 				</p>
 				<button
 					v-for="t in types"
 					:key="t.type_name"
-					class="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-base"
+					class="flex shrink-0 items-center gap-2 rounded px-2 py-1.5 text-left text-base lg:w-full"
 					:class="
 						t.type_name === selectedType
 							? 'bg-surface-gray-3 text-ink-gray-9'
@@ -114,7 +118,7 @@ function pageRange(s) {
 						:style="{ backgroundColor: t.color }"
 						aria-hidden="true"
 					/>
-					<span class="flex-1 truncate">{{ t.label }}</span>
+					<span class="truncate lg:flex-1">{{ t.label }}</span>
 					<span class="shrink-0 text-sm text-ink-gray-5">{{ t.count }}</span>
 				</button>
 			</aside>
@@ -123,33 +127,36 @@ function pageRange(s) {
 			<section class="min-w-0 flex-1 overflow-auto">
 				<div
 					v-if="selected"
-					class="sticky top-0 flex items-center gap-2 border-b border-outline-gray-1 bg-surface-base px-5 py-3"
+					class="sticky top-0 flex items-center gap-2 border-b border-outline-gray-1 bg-surface-base px-4 py-3 sm:px-5"
 				>
 					<span
 						class="size-3 shrink-0 rounded-full"
 						:style="{ backgroundColor: selected.color }"
 						aria-hidden="true"
 					/>
-					<h2 class="text-base font-medium text-ink-gray-9">{{ selected.label }}</h2>
+					<h2 class="min-w-0 truncate text-base font-medium text-ink-gray-9">
+						{{ selected.label }}
+					</h2>
 					<Badge :label="`${matchCount}`" theme="gray" variant="subtle" size="sm" />
 				</div>
 
-				<div class="px-5 py-3">
+				<div class="px-4 py-3 sm:px-5">
 					<div v-for="g in groups.data || []" :key="g.source_document" class="mb-6">
 						<button
-							class="mb-1.5 flex items-center gap-2 text-sm font-medium text-ink-gray-8 hover:text-ink-gray-9"
+							class="mb-1.5 flex w-full min-w-0 items-center gap-2 text-sm font-medium text-ink-gray-8 hover:text-ink-gray-9"
 							@click="openImport(g.import_name)"
 						>
 							<span
 								class="lucide-file-text size-4 text-ink-gray-5"
 								aria-hidden="true"
 							/>
-							<span class="truncate">{{ g.doc_title }}</span>
+							<span class="min-w-0 truncate">{{ g.doc_title }}</span>
 							<Badge
 								:label="`${g.sections.length}`"
 								theme="gray"
 								variant="subtle"
 								size="sm"
+								class="shrink-0"
 							/>
 						</button>
 						<div class="rounded-md border border-outline-gray-1">
@@ -170,6 +177,7 @@ function pageRange(s) {
 									theme="gray"
 									variant="subtle"
 									size="sm"
+									class="shrink-0"
 								/>
 							</div>
 						</div>

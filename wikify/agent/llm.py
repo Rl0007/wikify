@@ -55,11 +55,15 @@ def _openrouter_model(model: str) -> str:
 	return model if model.startswith("openrouter/") else f"openrouter/{model}"
 
 
-def complete_with_tools(model: str, messages: list, tools: list, *, stream: bool = True):
+def complete_with_tools(
+	model: str, messages: list, tools: list, *, stream: bool = True, include_usage: bool = False
+):
 	"""Stream a tool-calling completion. `tools` is a list of `registry.Tool`.
 
 	Returns the litellm streaming response (iterate chunks) when `stream`, else the
-	full response object.
+	full response object. `include_usage` asks the provider for a final, choice-less chunk
+	carrying the token + cost totals — off by default because a caller that iterates
+	chunks without guarding `chunk.choices` would trip over it.
 	"""
 	key = settings.openrouter_key()
 	if not key:
@@ -82,6 +86,7 @@ def complete_with_tools(model: str, messages: list, tools: list, *, stream: bool
 		messages=messages,
 		tools=tool_schemas,
 		stream=stream,
+		stream_options={"include_usage": True} if stream and include_usage else None,
 		api_key=key,
 		num_retries=2,
 	)

@@ -12,9 +12,12 @@ import {
 	useCall,
 	useList,
 } from "frappe-ui";
+import { useIsMobile } from "@/composables/useMediaQuery";
+import { actionButtonProps } from "@/utils/actionButton";
 import { clear as clearAgentContext } from "@/data/agentContext";
 
 const router = useRouter();
+const isMobile = useIsMobile();
 
 // Global landing — the agent opens with no default attachment here.
 onMounted(clearAgentContext);
@@ -73,19 +76,24 @@ function openProject(name) {
 	<div>
 		<PageHeader>
 			<h1 class="text-md text-ink-gray-9">Projects</h1>
-			<div class="flex items-center gap-2">
+			<div class="flex shrink-0 items-center gap-2 pl-2">
 				<Button
 					v-if="archivedCount"
 					variant="ghost"
 					theme="gray"
-					:label="showArchived ? 'Hide archived' : `Show archived (${archivedCount})`"
+					v-bind="
+						actionButtonProps(
+							isMobile,
+							'lucide-archive',
+							showArchived ? 'Hide archived' : `Show archived (${archivedCount})`
+						)
+					"
 					@click="showArchived = !showArchived"
 				/>
 				<Button
 					variant="solid"
 					theme="gray"
-					icon-left="lucide-plus"
-					label="New Project"
+					v-bind="actionButtonProps(isMobile, 'lucide-plus', 'New Project')"
 					@click="showNew = true"
 				/>
 			</div>

@@ -15,7 +15,7 @@ from wikify.agent import llm, session
 from wikify.agent.loop import request_cancel
 
 
-@frappe.whitelist()
+@frappe.whitelist(methods=["POST"])
 def run(
 	prompt: str,
 	session_id: str | None = None,
@@ -80,7 +80,7 @@ def run(
 	return {"session_id": sess.name, "message_id": user_msg.name}
 
 
-@frappe.whitelist()
+@frappe.whitelist(methods=["POST"])
 def cancel(session_id: str) -> dict:
 	"""Signal the running loop to stop at its next chunk."""
 	request_cancel(session_id)
@@ -112,7 +112,7 @@ def list_sessions(
 	)
 
 
-@frappe.whitelist()
+@frappe.whitelist(methods=["POST"])
 def new_session(
 	scope: str = "global", project: str | None = None, source_document: str | None = None
 ) -> dict:
@@ -159,7 +159,7 @@ def _owned_session(session_id: str):
 	return sess
 
 
-@frappe.whitelist()
+@frappe.whitelist(methods=["POST"])
 def rename_session(session_id: str, title: str) -> dict:
 	"""Rename a session (the history list / panel header)."""
 	title = (title or "").strip()
@@ -170,7 +170,7 @@ def rename_session(session_id: str, title: str) -> dict:
 	return {"ok": True, "title": title[:140]}
 
 
-@frappe.whitelist()
+@frappe.whitelist(methods=["POST"])
 def archive_session(session_id: str) -> dict:
 	"""Archive a session — it drops out of the (Active-only) history list."""
 	_owned_session(session_id)

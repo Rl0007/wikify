@@ -8,6 +8,10 @@ adoption picks best-of-three {baseline, cleanup, vlm}:
     small drop is the intended furniture removal);
   - vlm is adopt-eligible when it beats the baseline composite;
   - vlm wins over an eligible cleanup only when it also scores at least as high.
+Under all of that sit two floors (`pick_winner`): nothing dramatically below the best read
+of the page is adopted, and a near-empty candidate never displaces one carrying content.
+Every candidate — baseline included — clears the same diagram gate before it is scored, so
+a block rejected on one route cannot ride in on another.
 Always-run ≠ always-adopt. The adopted (or baseline) markdown becomes each page's
 **canonical** markdown; cross-page tables are then stitched, the doc's canonical mean is
 recomputed, and per-page LLM spend lands on `Source Page.llm_cost` /
@@ -22,29 +26,69 @@ over a manual is fast enough serial.
 
 from __future__ import annotations
 
+import re
 from collections.abc import Callable
 
 import fitz  # PyMuPDF
 
-from wikify.engine import llm, pdf_utils, settings, store
+from wikify.engine import diagrams, llm, pdf_utils, regions, settings, store
 from wikify.engine.loader.cleanup_llm import clean_markdown
 from wikify.engine.loader.table_stitch import stitch_cross_page_tables
 from wikify.engine.parsers import vlm
 from wikify.engine.sectionize import rebuild_and_classify
 from wikify.engine.verify import deterministic as det
 from wikify.engine.verify import score_page
+from wikify.rag import events
+
+# Two floors under adoption. A page had `# TIE TIT Molo` — ten characters of OCR noise — made
+# canonical at composite 0.058, because cleanup's own eligibility test only asks whether recall
+# regressed, and recall against an equally empty baseline had not. Neither floor replaces the
+# per-method rules; both sit under them, so a candidate can only ever become canonical if it is
+# also a competitive read of the page.
+ADOPTION_COMPOSITE_RATIO = 0.9
+MIN_CANONICAL_CHARS = 40
+_IMAGE_EMBED_RE = re.compile(r"!\[[^\]]*\]\([^)]*\)")
+_MARKUP_RE = re.compile(r"[\s#*_>|`~\-]+")
 
 
-def _pick_winner(candidates: list[tuple]) -> tuple | None:
+def content_chars(markdown: str) -> int:
+	"""How much the reader actually gets: markdown furniture and image embeds removed, so a
+	crop-and-nothing-else page does not read as content."""
+	return len(_MARKUP_RE.sub("", _IMAGE_EMBED_RE.sub("", markdown or "")))
+
+
+def with_page_crop(markdown: str, page_image: str | None) -> str:
+	"""A near-empty page keeps its crop. An image the reader can read beats a blank page."""
+	if not page_image or "![" in markdown or content_chars(markdown) >= MIN_CANONICAL_CHARS:
+		return markdown
+	return f"{markdown}\n\n![Source page]({page_image})".strip()
+
+
+def best_composite(candidates: list[tuple], baseline_composite: float) -> float:
+	"""The best read of the page anyone managed — the bar adoption and escalation both use."""
+	return max([baseline_composite or 0.0, *(candidate[2].composite for candidate in candidates)])
+
+
+def pick_winner(candidates: list[tuple], baseline_composite: float, baseline_markdown: str) -> tuple | None:
 	"""Best adopt-eligible candidate: vlm when it also matches/beats cleanup's composite
 	(cleanup's composite is depressed by intended furniture removal, so a tie goes to
 	vlm), else the eligible cleanup, else None (keep baseline)."""
-	eligible = [c for c in candidates if c[3]]
-	vlm_c = next((c for c in eligible if c[0] == "vlm"), None)
-	cleanup_c = next((c for c in eligible if c[0] == "cleanup"), None)
-	if vlm_c and (not cleanup_c or vlm_c[2].composite >= cleanup_c[2].composite):
-		return vlm_c
-	return cleanup_c
+	best = best_composite(candidates, baseline_composite)
+	best_chars = max([content_chars(baseline_markdown), *(content_chars(c[1]) for c in candidates)])
+	eligible = [
+		c
+		for c in candidates
+		if c[3]
+		and c[2].composite >= best * ADOPTION_COMPOSITE_RATIO
+		and (content_chars(c[1]) >= MIN_CANONICAL_CHARS or content_chars(c[1]) >= best_chars)
+	]
+	vlm_candidate = next((c for c in eligible if c[0] == "vlm"), None)
+	cleanup_candidate = next((c for c in eligible if c[0] == "cleanup"), None)
+	if vlm_candidate and (
+		not cleanup_candidate or vlm_candidate[2].composite >= cleanup_candidate[2].composite
+	):
+		return vlm_candidate
+	return cleanup_candidate
 
 
 def remediate_pdf(
@@ -96,12 +140,22 @@ def remediate_pdf(
 			page = doc[p["page_no"] - 1]
 			gt = page.get_text("text")
 			kind = p["kind"]
-			base_md = p["baseline_markdown"] or ""
+			page_image = p["image"] or ""
 			data_url = pdf_utils.png_to_data_url(pdf_utils.render_png(page, dpi=dpi))
+			# Regions are the page's shape analysis — computed once and reused for the hint.
+			page_regions = regions.find_regions(page)
 
 			use_judge = judge_all or kind == "visual"
 			img = data_url if use_judge else None
 			llm.reset_metrics()
+			# Every candidate — baseline included — clears the same diagram gate before it is
+			# scored, so a block that would be rejected on one route cannot survive on another.
+			candidates: list[tuple] = []  # (method, markdown, PageScore, adopt_eligible)
+			errors: list[str] = []
+			base_md, base_notes = diagrams.remove_unverified_diagrams(
+				p["baseline_markdown"] or "", page_image
+			)
+			errors.extend(base_notes)
 			base_ps = score_page(
 				p["page_no"], base_md, gt, image_data_url=img, use_judge=use_judge, page_kind=kind
 			)
@@ -109,12 +163,18 @@ def remediate_pdf(
 			# Every page gets the vlm pass; text pages also get the cheap cleanup variant.
 			# A single page's model call failing (rate limit, billing, transient) must not
 			# abort the whole pass — note it, try the other candidate / keep baseline, move on.
-			candidates: list[tuple] = []  # (method, markdown, PageScore, adopt_eligible)
-			errors: list[str] = []
 			try:
 				vlm_md = vlm.parse_page_image(
-					data_url, project_context=project_context, instruction=instruction
+					data_url,
+					project_context=project_context,
+					instruction=instruction,
+					shape_hint=regions.shape_hint(page_regions),
 				)
+				# Nothing unverified is stored: a diagram that will not parse after repair, or one
+				# carrying the signature of a table flattened into dangling branches, is dropped in
+				# favour of the page image before it can be scored, adopted or read.
+				vlm_md, diagram_notes = diagrams.remove_unverified_diagrams(vlm_md, page_image)
+				errors.extend(diagram_notes)
 				vlm_ps = score_page(
 					p["page_no"], vlm_md, gt, image_data_url=img, use_judge=use_judge, page_kind=kind
 				)
@@ -123,9 +183,11 @@ def remediate_pdf(
 				errors.append(f"vlm failed: {e}")
 			if kind != "visual":
 				try:
-					clean_md = clean_markdown(
-						base_md, project_context=project_context, instruction=instruction
+					clean_md, clean_notes = diagrams.remove_unverified_diagrams(
+						clean_markdown(base_md, project_context=project_context, instruction=instruction),
+						page_image,
 					)
+					errors.extend(clean_notes)
 					clean_ps = score_page(
 						p["page_no"], clean_md, gt, image_data_url=img, use_judge=use_judge, page_kind=kind
 					)
@@ -138,7 +200,13 @@ def remediate_pdf(
 				except Exception as e:
 					errors.append(f"cleanup failed: {e}")
 
-			winner = _pick_winner(candidates)
+			winner = pick_winner(candidates, base_ps.composite, base_md)
+			best = best_composite(candidates, base_ps.composite)
+			if best < float(settings.get("escalate_threshold")):
+				errors.append(
+					f"every candidate scored below the escalate threshold (best {best}) — "
+					"kept the best available read; this page needs a human"
+				)
 			# Record the adopted candidate; when nothing is adopted, record the vlm attempt
 			# (the expensive audit trail) so the review UI shows what was tried and why not.
 			record = (
@@ -160,6 +228,9 @@ def remediate_pdf(
 				canon_md[p["page_no"]] = record[1]
 				canon_comp[p["page_no"]] = new_composite
 				canon_src[p["page_no"]] = method
+			else:
+				canon_md[p["page_no"]] = base_md
+			canon_md[p["page_no"]] = with_page_crop(canon_md[p["page_no"]], page_image)
 
 			doc_cost += store.add_page_cost(p["name"], llm.get_metrics())
 
@@ -178,9 +249,12 @@ def remediate_pdf(
 
 	# Stitch cross-page tables over the canonical set, then persist canonical per page.
 	stitched = dict(stitch_cross_page_tables([(p["page_no"], canon_md[p["page_no"]]) for p in pages]))
-	for p in pages:
-		pno = p["page_no"]
-		store.set_canonical(p["name"], stitched[pno], canon_comp[pno], canon_src[pno])
+	# The tree is rebuilt wholesale a few lines down, so invalidating page by page here
+	# would queue a redundant propagation pass over work that is about to be replaced.
+	with events.suspended_indexing():
+		for p in pages:
+			pno = p["page_no"]
+			store.set_canonical(p["name"], stitched[pno], canon_comp[pno], canon_src[pno])
 
 	comps = [c for c in canon_comp.values() if c is not None]
 	canonical_mean = round(sum(comps) / len(comps), 3) if comps else None

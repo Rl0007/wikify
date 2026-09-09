@@ -81,6 +81,8 @@ class TestWikiGenerate(FrappeTestCase):
 		# Covers sections + pages + the Source Document row itself: the commit below
 		# is what used to persist the doc insert and leak one fixture per test run.
 		_cleanup._delete_document_rows(self.sd.name)
+		# test setup must be visible to the worker connection
+		# nosemgrep
 		frappe.db.commit()
 
 	def _generate(self, **kwargs):

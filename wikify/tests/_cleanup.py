@@ -28,6 +28,8 @@ def _finalized(delete_fn) -> None:
 	"""
 	frappe.db.rollback()
 	delete_fn()
+	# test setup must be visible to the worker connection
+	# nosemgrep
 	frappe.db.commit()
 
 
@@ -64,6 +66,12 @@ def delete_session(session_name: str) -> None:
 
 def delete_project(name: str) -> None:
 	_finalized(lambda: frappe.db.delete("Wikify Project", {"name": name}))
+
+
+def delete_section_type(type_name: str) -> None:
+	"""Section Type labels are identity — a leaked test type pollutes the real taxonomy,
+	and the agent then offers it to users as a near match."""
+	_finalized(lambda: frappe.db.delete("Section Type", {"name": type_name}))
 
 
 def register_session_sweep(testcase) -> None:

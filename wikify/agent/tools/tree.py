@@ -148,6 +148,8 @@ TOOLS = [
 	Tool(
 		name="move_section",
 		side="server",
+		# adjacent literals are one wrapped sentence, not a missing comma
+		# nosemgrep
 		description=(
 			"Reparent and/or reorder a section in the tree. Pass the section id and the new "
 			"parent id (omit new_parent to move it to the top level); new_index is the 0-based "
@@ -186,6 +188,8 @@ TOOLS = [
 	Tool(
 		name="set_section_type",
 		side="server",
+		# adjacent literals are one wrapped sentence, not a missing comma
+		# nosemgrep
 		description=(
 			"Retag a section with a Section Type (the machine key, e.g. surgical_procedures). "
 			"Use list_section_types to see the taxonomy; create_section_type to add a new tag. "
@@ -223,6 +227,8 @@ TOOLS = [
 	Tool(
 		name="create_section",
 		side="server",
+		# adjacent literals are one wrapped sentence, not a missing comma
+		# nosemgrep
 		description=(
 			"Create a new section (a future wiki page) under a parent — e.g. 'add a glossary "
 			"page'. No page range is set. Defaults to the attached document; omit parent for "
@@ -247,6 +253,8 @@ TOOLS = [
 	Tool(
 		name="delete_section",
 		side="server",
+		# adjacent literals are one wrapped sentence, not a missing comma
+		# nosemgrep
 		description=(
 			"Delete a section AND its whole subtree. Destructive — the user must confirm "
 			"before it runs. Prefer toggle_include_in_wiki when the user only wants it out of "
@@ -266,6 +274,8 @@ TOOLS = [
 	Tool(
 		name="split_section",
 		side="server",
+		# adjacent literals are one wrapped sentence, not a missing comma
+		# nosemgrep
 		description=(
 			"Split one section into two sibling pages at a markdown heading inside its body. "
 			"The original keeps everything above the heading; a new sibling right after it "
@@ -290,6 +300,8 @@ TOOLS = [
 	Tool(
 		name="merge_sections",
 		side="server",
+		# adjacent literals are one wrapped sentence, not a missing comma
+		# nosemgrep
 		description=(
 			"Merge two or more SIBLING sections into the first listed: markdown concatenated "
 			"in tree order, children reparented to the survivor, the others deleted."

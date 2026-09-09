@@ -7,7 +7,10 @@ Drives the whitelisted APIs + the agent tool wrappers, asserting NestedSet + den
 invariants after every operation (the same contract Slice 5's edits keep).
 """
 
+from unittest.mock import patch
+
 import frappe
+import frappe.model.document
 from frappe.tests.utils import FrappeTestCase
 
 from wikify.agent.context import Ctx
@@ -187,3 +190,65 @@ class TestSectionSurgery(FrappeTestCase):
 		self.assertIn("Merged 1 section(s) into '2. Beta'", out)
 		out = tt._delete_section(self.ctx, {"name": self._name("5. Epsilon")})
 		self.assertIn("Deleted '5. Epsilon'", out)
+
+
+class TestReplaceSectionsIsAtomic(FrappeTestCase):
+	"""A failed rebuild must leave the previous tree standing, not a truncated one.
+
+	`replace_sections` deletes the tree and then inserts the new one. Without a savepoint
+	an insert that threw left the document holding whatever prefix had landed and none of
+	the old rows — and `jobs.remediate`'s handler reverts the import to `Review` on the
+	stated premise that the parse result is intact, then commits, so the truncated tree
+	became the document. The over-length title that first triggered this is clipped now;
+	the hazard was the missing savepoint, not that one trigger.
+	"""
+
+	def setUp(self):
+		self.source_document = frappe.get_doc(
+			{"doctype": "Source Document", "title": "Atomic Rebuild"}
+		).insert(ignore_permissions=True)
+		store.replace_sections(
+			self.source_document.name,
+			[
+				_sec("1. Alpha", 1, ["1. Alpha"], 1, 1),
+				_sec("2. Beta", 1, ["2. Beta"], 2, 2),
+				_sec("3. Gamma", 1, ["3. Gamma"], 3, 3),
+			],
+		)
+
+	def titles(self) -> list[str]:
+		return [
+			row.title
+			for row in frappe.get_all(
+				"Source Section",
+				filters={"source_document": self.source_document.name},
+				fields=["title"],
+				order_by="lft asc",
+			)
+		]
+
+	def test_an_insert_that_throws_leaves_the_previous_tree_standing(self):
+		replacement = [
+			_sec("A. New", 1, ["A. New"], 1, 1),
+			_sec("B. New", 1, ["B. New"], 2, 2),
+			_sec("C. New", 1, ["C. New"], 3, 3),
+		]
+		real_insert = frappe.model.document.Document.insert
+
+		def insert_but_fail_on_the_third(self, *args, **kwargs):
+			if self.doctype == "Source Section" and self.title == "C. New":
+				raise frappe.ValidationError("insert blew up mid-rebuild")
+			return real_insert(self, *args, **kwargs)
+
+		with patch.object(frappe.model.document.Document, "insert", insert_but_fail_on_the_third):
+			with self.assertRaises(frappe.ValidationError):
+				store.replace_sections(self.source_document.name, replacement)
+
+		self.assertEqual(self.titles(), ["1. Alpha", "2. Beta", "3. Gamma"])
+
+	def test_a_successful_rebuild_still_replaces_the_tree(self):
+		store.replace_sections(
+			self.source_document.name,
+			[_sec("A. New", 1, ["A. New"], 1, 1), _sec("B. New", 1, ["B. New"], 2, 2)],
+		)
+		self.assertEqual(self.titles(), ["A. New", "B. New"])

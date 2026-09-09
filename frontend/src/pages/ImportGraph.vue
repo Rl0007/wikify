@@ -40,7 +40,7 @@ function onSelect(node) {
 				<RouterLink
 					v-if="imp.doc?.project"
 					:to="{ name: 'ProjectDetail', params: { name: imp.doc.project } }"
-					class="shrink-0 text-base text-ink-gray-5 hover:text-ink-gray-7"
+					class="hidden shrink-0 text-base text-ink-gray-5 hover:text-ink-gray-7 lg:block"
 					>{{ imp.doc.project_name || "Project" }}
 					<span class="text-ink-gray-4" aria-hidden="true">/</span></RouterLink
 				>
@@ -50,7 +50,7 @@ function onSelect(node) {
 					>{{ imp.doc?.import_title || props.name }}
 					<span class="text-ink-gray-4" aria-hidden="true">/</span></RouterLink
 				>
-				<h1 class="text-md text-ink-gray-9">Graph</h1>
+				<h1 class="shrink-0 text-md text-ink-gray-9">Graph</h1>
 			</div>
 		</PageHeader>
 

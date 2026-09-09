@@ -78,17 +78,17 @@ function submit() {
 				<nav class="flex min-w-0 items-center gap-1.5 text-base">
 					<RouterLink
 						:to="{ name: 'Projects' }"
-						class="text-ink-gray-5 hover:text-ink-gray-7"
+						class="hidden text-ink-gray-5 hover:text-ink-gray-7 lg:block"
 						>Projects</RouterLink
 					>
-					<span class="text-ink-gray-4" aria-hidden="true">/</span>
+					<span class="hidden text-ink-gray-4 lg:block" aria-hidden="true">/</span>
 					<RouterLink
 						:to="{ name: 'ProjectDetail', params: { name } }"
 						class="truncate text-ink-gray-5 hover:text-ink-gray-7"
 						>{{ project.doc?.project_name || name }}</RouterLink
 					>
-					<span class="text-ink-gray-4" aria-hidden="true">/</span>
-					<span class="truncate text-ink-gray-9">Settings</span>
+					<span class="shrink-0 text-ink-gray-4" aria-hidden="true">/</span>
+					<span class="shrink-0 text-ink-gray-9">Settings</span>
 				</nav>
 			</div>
 		</PageHeader>

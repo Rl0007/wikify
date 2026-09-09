@@ -1,11 +1,12 @@
 <script setup>
-import { computed, onBeforeUnmount, ref, watch } from "vue";
+import { computed, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { Badge, Button, Dropdown, Popover, useList } from "frappe-ui";
 import { CodeEditor } from "frappe-ui/code-editor";
 import { Splitpanes, Pane } from "splitpanes";
 import "splitpanes/dist/splitpanes.css";
 import MarkdownPreview from "@/components/MarkdownPreview.vue";
+import { useIsNarrow, useMediaQuery } from "@/composables/useMediaQuery";
 import { setPage } from "@/data/agentContext";
 
 const props = defineProps({
@@ -67,6 +68,19 @@ const selected = computed(
 	() => (pages.data || []).find((p) => p.name === selectedName.value) || null
 );
 
+// Narrow screens drill down instead of splitting: the list fills the width, tapping a
+// page swaps in its detail, Back returns. A ?page= deep link opens straight on detail.
+// Swapping the Splitpanes host for a plain <div> keeps one copy of the markup rather
+// than forking a phone-only template.
+const isNarrow = useIsNarrow();
+const showDetail = ref(!!route.query.page);
+const SplitHost = computed(() => (isNarrow.value ? "div" : Splitpanes));
+const SplitPane = computed(() => (isNarrow.value ? "div" : Pane));
+function openPage(name) {
+	selectedName.value = name;
+	showDetail.value = true;
+}
+
 // Attach the selected page as the agent's default context (swaps out any section chip).
 watch(selected, (p) => {
 	if (p) setPage({ name: p.name, label: `Page ${p.page_no}` });
@@ -121,11 +135,7 @@ const filterOptions = computed(() => [
 // 23) — the Page tab only exists in the narrow fallback, where the split collapses
 // back to tabs. Viewing the whole PDF lives at the document level (ImportDetail's
 // top-level PDF tab), since it isn't page-specific.
-const wideQuery = window.matchMedia("(min-width: 1100px)");
-const isWide = ref(wideQuery.matches);
-const onWideChange = (e) => (isWide.value = e.matches);
-wideQuery.addEventListener("change", onWideChange);
-onBeforeUnmount(() => wideQuery.removeEventListener("change", onWideChange));
+const isWide = useMediaQuery("(min-width: 1100px)");
 
 // Icon-only tabs (tooltip carries the name) — same icons WikiPreview's toggle uses.
 const tabs = computed(() =>
@@ -145,14 +155,21 @@ watch(isWide, (wide) => {
 	if (wide && activeTab.value === "page") activeTab.value = "preview";
 });
 
-// User-draggable image∥preview ratio, persisted like other pane sizes.
+// User-draggable image∥preview ratio, persisted like other pane sizes. Clamped on read:
+// a stored size dragged to the edge on a desktop would otherwise strand the next visitor
+// with a few unreadable pixels of one pane.
 const SPLIT_KEY = "wikify:pageReviewSplit";
-const imgPaneSize = ref(Number(localStorage.getItem(SPLIT_KEY)) || 50);
+const MIN_SPLIT = 20;
+const imgPaneSize = ref(clampSplit(Number(localStorage.getItem(SPLIT_KEY))));
+function clampSplit(size) {
+	if (!size) return 50;
+	return Math.min(100 - MIN_SPLIT, Math.max(MIN_SPLIT, size));
+}
 function onSplitResized(event) {
 	const size = (event?.panes || event)?.[0]?.size;
 	if (size) {
-		imgPaneSize.value = size;
-		localStorage.setItem(SPLIT_KEY, String(size));
+		imgPaneSize.value = clampSplit(size);
+		localStorage.setItem(SPLIT_KEY, String(imgPaneSize.value));
 	}
 }
 
@@ -257,15 +274,25 @@ function fmtDelta(v) {
 			No pages yet — parse still running or not started.
 		</p>
 
-		<Splitpanes v-else class="h-full">
+		<component :is="SplitHost" v-else :class="isNarrow ? 'flex h-full flex-col' : 'h-full'">
 			<!-- Left: thumbnail list -->
-			<Pane :size="30" :min-size="20" class="flex flex-col border-r border-outline-gray-1">
-				<div class="flex items-center gap-1 border-b border-outline-gray-1 px-3 py-2">
+			<component
+				:is="SplitPane"
+				v-show="!isNarrow || !showDetail"
+				:size="isNarrow ? undefined : 30"
+				:min-size="isNarrow ? undefined : 20"
+				class="flex flex-col"
+				:class="isNarrow ? 'min-h-0 flex-1' : 'border-r border-outline-gray-1'"
+			>
+				<div
+					class="flex items-center gap-1 overflow-x-auto border-b border-outline-gray-1 px-3 py-2"
+				>
 					<Button
 						v-for="f in filterOptions"
 						:key="f.key"
 						:label="`${f.label} (${f.count})`"
 						size="sm"
+						class="shrink-0"
 						:variant="filter === f.key ? 'subtle' : 'ghost'"
 						@click="filter = f.key"
 					/>
@@ -287,8 +314,8 @@ function fmtDelta(v) {
 						v-for="page in visiblePages"
 						:key="page.name"
 						class="mb-1 flex w-full items-center gap-2 rounded-md p-1.5 text-left hover:bg-surface-gray-2"
-						:class="selectedName === page.name ? 'bg-surface-gray-3' : ''"
-						@click="selectedName = page.name"
+						:class="selectedName === page.name && !isNarrow ? 'bg-surface-gray-3' : ''"
+						@click="openPage(page.name)"
 					>
 						<img
 							v-if="page.image"
@@ -297,7 +324,7 @@ function fmtDelta(v) {
 							class="h-14 w-11 shrink-0 rounded border border-outline-gray-1 object-cover object-top"
 						/>
 						<div class="min-w-0 flex-1">
-							<div class="flex items-center gap-1.5">
+							<div class="flex flex-wrap items-center gap-1.5">
 								<span class="text-sm font-medium text-ink-gray-8"
 									>Page {{ page.page_no }}</span
 								>
@@ -308,7 +335,7 @@ function fmtDelta(v) {
 									size="sm"
 								/>
 							</div>
-							<div class="mt-1 flex items-center gap-1.5">
+							<div class="mt-1 flex flex-wrap items-center gap-1.5">
 								<Badge
 									:label="page.verdict || '—'"
 									:theme="verdictTheme[page.verdict] || 'gray'"
@@ -329,15 +356,29 @@ function fmtDelta(v) {
 						</div>
 					</button>
 				</div>
-			</Pane>
+			</component>
 
 			<!-- Right: detail -->
-			<Pane :size="70" class="flex flex-col">
+			<component
+				:is="SplitPane"
+				v-show="!isNarrow || showDetail"
+				:size="isNarrow ? undefined : 70"
+				class="flex flex-col"
+				:class="isNarrow ? 'min-h-0 flex-1' : ''"
+			>
 				<template v-if="selected">
 					<!-- Audit strip: verdict + audit score + cost; sub-metrics in Details -->
 					<div class="border-b border-outline-gray-1 px-4 py-3">
 						<div class="flex flex-wrap items-center gap-x-5 gap-y-2">
 							<div class="flex items-center gap-2">
+								<Button
+									v-if="isNarrow"
+									size="sm"
+									variant="ghost"
+									icon="lucide-arrow-left"
+									aria-label="Back to pages"
+									@click="showDetail = false"
+								/>
 								<span class="text-base font-medium text-ink-gray-9"
 									>Page {{ selected.page_no }}</span
 								>
@@ -384,7 +425,7 @@ function fmtDelta(v) {
 									/>
 								</template>
 								<template #body-main>
-									<div class="w-80 p-3">
+									<div class="w-72 p-3 sm:w-80">
 										<div class="flex flex-wrap gap-x-5 gap-y-1">
 											<div
 												v-for="c in scoreCells"
@@ -628,7 +669,7 @@ function fmtDelta(v) {
 				<p v-else class="py-10 text-center text-sm text-ink-gray-5">
 					Select a page to review.
 				</p>
-			</Pane>
-		</Splitpanes>
+			</component>
+		</component>
 	</div>
 </template>

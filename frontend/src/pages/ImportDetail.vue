@@ -13,6 +13,8 @@ import {
 	useList,
 } from "frappe-ui";
 import { useSocket } from "@/socket";
+import { useIsMobile } from "@/composables/useMediaQuery";
+import { actionButtonProps } from "@/utils/actionButton";
 import { statusTheme, isActive } from "@/utils/status";
 import PageReview from "@/components/PageReview.vue";
 import SectionTree from "@/components/SectionTree.vue";
@@ -27,6 +29,7 @@ const props = defineProps({
 
 const route = useRoute();
 const router = useRouter();
+const isMobile = useIsMobile();
 
 const imp = useDoc({ doctype: "Wikify Import", name: props.name });
 
@@ -178,7 +181,7 @@ const levelColor = { info: "text-ink-gray-7", warn: "text-ink-amber-6", error: "
 <template>
 	<div>
 		<PageHeader>
-			<div class="flex min-w-0 items-center gap-3">
+			<div class="flex min-w-0 items-center gap-2 sm:gap-3">
 				<Button
 					variant="ghost"
 					icon="lucide-arrow-left"
@@ -191,7 +194,7 @@ const levelColor = { info: "text-ink-gray-7", warn: "text-ink-amber-6", error: "
 				<RouterLink
 					v-if="imp.doc?.project"
 					:to="{ name: 'ProjectDetail', params: { name: imp.doc.project } }"
-					class="shrink-0 text-base text-ink-gray-5 hover:text-ink-gray-7"
+					class="hidden shrink-0 text-base text-ink-gray-5 hover:text-ink-gray-7 lg:block"
 					>{{ imp.doc.project_name || "Project" }}
 					<span class="text-ink-gray-4" aria-hidden="true">/</span></RouterLink
 				>
@@ -203,24 +206,26 @@ const levelColor = { info: "text-ink-gray-7", warn: "text-ink-amber-6", error: "
 					:label="status"
 					:theme="statusTheme(status)"
 					variant="subtle"
+					class="shrink-0"
 				/>
 				<Progress
 					v-if="isActive(status)"
 					:value="imp.doc?.stage_progress || 0"
 					size="sm"
-					class="w-40"
+					class="w-16 shrink-0 sm:w-40"
 				/>
-				<span v-if="isActive(status)" class="truncate text-sm text-ink-gray-5">{{
-					imp.doc?.stage_label
-				}}</span>
+				<span
+					v-if="isActive(status)"
+					class="hidden truncate text-sm text-ink-gray-5 lg:block"
+					>{{ imp.doc?.stage_label }}</span
+				>
 			</div>
 
-			<div class="flex items-center gap-2">
+			<div class="flex shrink-0 items-center gap-2 pl-2">
 				<Button
 					v-if="imp.doc?.source_document"
 					variant="subtle"
-					label="Graph"
-					icon-left="lucide-waypoints"
+					v-bind="actionButtonProps(isMobile, 'lucide-waypoints', 'Graph')"
 					:route="{ name: 'ImportGraph', params: { name: props.name } }"
 				/>
 				<Dropdown
@@ -233,8 +238,8 @@ const levelColor = { info: "text-ink-gray-7", warn: "text-ink-amber-6", error: "
 					<Button
 						variant="solid"
 						theme="gray"
-						label="Remediate"
-						icon-right="lucide-chevron-down"
+						v-bind="actionButtonProps(isMobile, 'lucide-wand-sparkles', 'Remediate')"
+						:icon-right="isMobile ? undefined : 'lucide-chevron-down'"
 						:loading="remediate.loading"
 					/>
 				</Dropdown>
@@ -307,19 +312,25 @@ const levelColor = { info: "text-ink-gray-7", warn: "text-ink-amber-6", error: "
 								:class="levelColor[entry.level] || 'text-ink-gray-7'"
 							>
 								<span class="shrink-0 text-ink-gray-4">[{{ entry.stage }}]</span>
-								<span>{{ entry.message }}</span>
+								<span class="min-w-0 break-words">{{ entry.message }}</span>
 							</div>
 						</div>
 					</div>
 				</div>
 
 				<!-- Pages -->
-				<div v-else-if="tab.key === 'pages'" class="h-[calc(100vh-7rem)]">
+				<div
+					v-else-if="tab.key === 'pages'"
+					class="h-[calc(100dvh-9.5rem)] sm:h-[calc(100vh-7rem)]"
+				>
 					<PageReview ref="pageReview" :source-document="imp.doc?.source_document" />
 				</div>
 
 				<!-- Tree -->
-				<div v-else-if="tab.key === 'tree'" class="h-[calc(100vh-7rem)]">
+				<div
+					v-else-if="tab.key === 'tree'"
+					class="h-[calc(100dvh-9.5rem)] sm:h-[calc(100vh-7rem)]"
+				>
 					<SectionTree
 						ref="sectionTree"
 						:source-document="imp.doc?.source_document"
@@ -332,12 +343,18 @@ const levelColor = { info: "text-ink-gray-7", warn: "text-ink-amber-6", error: "
 				</div>
 
 				<!-- Explore -->
-				<div v-else-if="tab.key === 'explore'" class="h-[calc(100vh-7rem)]">
+				<div
+					v-else-if="tab.key === 'explore'"
+					class="h-[calc(100dvh-9.5rem)] sm:h-[calc(100vh-7rem)]"
+				>
 					<Explore :source-document="imp.doc?.source_document" :import-name="name" />
 				</div>
 
 				<!-- Wiki -->
-				<div v-else-if="tab.key === 'wiki'" class="h-[calc(100vh-7rem)]">
+				<div
+					v-else-if="tab.key === 'wiki'"
+					class="h-[calc(100dvh-9.5rem)] sm:h-[calc(100vh-7rem)]"
+				>
 					<WikiGenerate
 						:source-document="imp.doc?.source_document"
 						:import-name="name"
@@ -348,12 +365,28 @@ const levelColor = { info: "text-ink-gray-7", warn: "text-ink-amber-6", error: "
 				</div>
 
 				<!-- PDF (whole document) -->
-				<div v-else-if="tab.key === 'pdf'" class="h-[calc(100vh-7rem)]">
+				<div
+					v-else-if="tab.key === 'pdf'"
+					class="flex h-[calc(100dvh-9.5rem)] flex-col sm:h-[calc(100vh-7rem)]"
+				>
+					<!-- Mobile browsers routinely render an embedded PDF as a blank box, so the
+					     way out is offered up front rather than only in the <object> fallback. -->
+					<div
+						v-if="imp.doc?.pdf"
+						class="flex shrink-0 items-center justify-end border-b border-outline-gray-1 px-3 py-1.5 sm:hidden"
+					>
+						<a
+							:href="imp.doc.pdf"
+							target="_blank"
+							class="text-sm text-ink-blue-6 hover:underline"
+							>Open PDF in a new tab ↗</a
+						>
+					</div>
 					<object
 						v-if="imp.doc?.pdf"
 						:data="`${imp.doc.pdf}#view=FitH`"
 						type="application/pdf"
-						class="h-full w-full"
+						class="min-h-0 w-full flex-1"
 					>
 						<p class="p-4 text-sm text-ink-gray-5">
 							Can't embed the PDF here —

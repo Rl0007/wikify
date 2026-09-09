@@ -17,6 +17,7 @@ from frappe.query_builder import Order
 from frappe.query_builder.functions import Coalesce
 
 from wikify.engine import store
+from wikify.rag import events
 
 
 @frappe.whitelist()
@@ -116,6 +117,11 @@ def _rebuild_tree(source_document: str) -> None:
 	for root in children_of(None):
 		right = walk(root, right, 1, [])
 
+	# Every path field here is written with `set_value`, which fires no doc_event, and
+	# `hierarchy_path` is the contextual prefix embedded into each chunk — so a rename or a
+	# reparent changes what the index holds for an unknown number of sections.
+	events.document_structure_changed(source_document)
+
 
 def _subtree_names(name: str) -> tuple[str, list[str]]:
 	"""(source_document, [names in the subtree rooted at `name`]) via lft/rgt range."""
@@ -134,7 +140,7 @@ def _subtree_names(name: str) -> tuple[str, list[str]]:
 	return sec.source_document, names
 
 
-@frappe.whitelist()
+@frappe.whitelist(methods=["POST"])
 def create_section_type(
 	type_name: str, label: str | None = None, description: str | None = None, color: str | None = None
 ) -> dict:
@@ -163,7 +169,7 @@ def create_section_type(
 	return {"ok": True, "type_name": key, "existed": False}
 
 
-@frappe.whitelist()
+@frappe.whitelist(methods=["POST"])
 def reorder_section(
 	name: str, new_parent: str | None = None, new_index: int = 0, siblings: str | list | None = None
 ) -> dict:
@@ -199,7 +205,7 @@ def reorder_section(
 	return {"ok": True}
 
 
-@frappe.whitelist()
+@frappe.whitelist(methods=["POST"])
 def move_section(name: str, new_parent: str | None = None, new_index: int | None = None) -> dict:
 	"""Reparent + reorder a section without the client computing the sibling order.
 
@@ -249,7 +255,7 @@ def move_section(name: str, new_parent: str | None = None, new_index: int | None
 	return {"ok": True, "index": idx}
 
 
-@frappe.whitelist()
+@frappe.whitelist(methods=["POST"])
 def set_section_type(name: str, section_type: str | None = None) -> dict:
 	"""Retag a section with a `section_type` (must be an existing Section Type, or blank)."""
 	if not frappe.db.exists("Source Section", name):
@@ -258,10 +264,12 @@ def set_section_type(name: str, section_type: str | None = None) -> dict:
 	if section_type and not frappe.db.exists("Section Type", section_type):
 		frappe.throw(_("Unknown Section Type {0}.").format(section_type))
 	frappe.db.set_value("Source Section", name, "section_type", section_type, update_modified=False)
+	# The type is a filter column on every chunk, so the exhaustive leg answers from it.
+	events.section_content_changed([name])
 	return {"ok": True, "section_type": section_type}
 
 
-@frappe.whitelist()
+@frappe.whitelist(methods=["POST"])
 def rename_section(name: str, title: str) -> dict:
 	"""Rename a section. Recomputes `hierarchy_path` for it and its descendants."""
 	title = (title or "").strip()
@@ -273,7 +281,7 @@ def rename_section(name: str, title: str) -> dict:
 	return {"ok": True}
 
 
-@frappe.whitelist()
+@frappe.whitelist(methods=["POST"])
 def toggle_include(name: str, include: bool | int | str) -> dict:
 	"""Set `include_in_wiki` on a section and its whole subtree (cascade)."""
 	include = 1 if frappe.parse_json(include) else 0
@@ -284,7 +292,7 @@ def toggle_include(name: str, include: bool | int | str) -> dict:
 	return {"ok": True, "count": len(names)}
 
 
-@frappe.whitelist()
+@frappe.whitelist(methods=["POST"])
 def delete_section(name: str) -> dict:
 	"""Delete a section and its entire subtree, then rebuild the doc tree."""
 	from wikify.engine.refs import extract_references
@@ -300,7 +308,7 @@ def delete_section(name: str) -> dict:
 	return {"ok": True, "deleted": len(names)}
 
 
-@frappe.whitelist()
+@frappe.whitelist(methods=["POST"])
 def create_section(
 	source_document: str,
 	title: str,
@@ -350,7 +358,7 @@ def create_section(
 	return {"ok": True, "name": doc.name}
 
 
-@frappe.whitelist()
+@frappe.whitelist(methods=["POST"])
 def split_section(name: str, at_heading: str, new_title: str | None = None) -> dict:
 	"""Split one section into two siblings at a markdown heading — 0.3 Slice 20.
 
@@ -434,7 +442,7 @@ def split_section(name: str, at_heading: str, new_title: str | None = None) -> d
 	return {"ok": True, "name": name, "new_name": new.name, "new_title": title}
 
 
-@frappe.whitelist()
+@frappe.whitelist(methods=["POST"])
 def merge_sections(names: list | str) -> dict:
 	"""Merge sibling sections into the FIRST listed — 0.3 Slice 20.
 
@@ -507,7 +515,7 @@ def merge_sections(names: list | str) -> dict:
 	return {"ok": True, "name": survivor.name, "merged": len(husks)}
 
 
-@frappe.whitelist()
+@frappe.whitelist(methods=["POST"])
 def build_graph(import_name: str) -> dict:
 	"""Approve the reviewed tree — advance the import + document to `Graphed`.
 

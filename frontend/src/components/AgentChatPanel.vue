@@ -38,6 +38,15 @@ function saveGeo() {
 	localStorage.setItem(GEO_KEY, JSON.stringify({ ...geo }));
 }
 
+// A geometry saved on a wide screen would otherwise stay wider than a narrow viewport the
+// window is later opened in — a fixed element that overhangs the viewport drags the whole
+// page into horizontal scroll, and its close button can land off-screen.
+function fitToViewport() {
+	Object.assign(geo, clamped(geo));
+}
+window.addEventListener("resize", fitToViewport);
+onBeforeUnmount(() => window.removeEventListener("resize", fitToViewport));
+
 const windowStyle = computed(() =>
 	isPhone.value
 		? {}

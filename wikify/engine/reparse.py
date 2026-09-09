@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import fitz  # PyMuPDF
 
-from wikify.engine import llm, pdf_utils, settings, store
+from wikify.engine import diagrams, llm, pdf_utils, regions, remediate, settings, store
 from wikify.engine.loader.cleanup_llm import clean_markdown
 from wikify.engine.parsers import vlm
 from wikify.engine.verify import score_page
@@ -60,6 +60,7 @@ def reparse_page(
 	with fitz.open(str(pdf_path)) as doc:
 		fpage = doc[page_no - 1]
 		gt = fpage.get_text("text")
+		shape_hint = regions.shape_hint(regions.find_regions(fpage))
 		data_url = pdf_utils.png_to_data_url(pdf_utils.render_png(fpage, dpi=dpi))
 
 	kind = page["kind"]
@@ -70,12 +71,17 @@ def reparse_page(
 
 	llm.reset_metrics()
 	new_md = (
-		vlm.parse_page_image(data_url, project_context=project_context, instruction=instruction)
+		vlm.parse_page_image(
+			data_url, project_context=project_context, instruction=instruction, shape_hint=shape_hint
+		)
 		if method == "vlm"
 		else clean_markdown(base_md, project_context=project_context, instruction=instruction)
 	)
+	page_image = store.get_page_image(page["name"]) or ""
+	new_md, diagram_notes = diagrams.remove_unverified_diagrams(new_md, page_image)
+	new_md = remediate.with_page_crop(new_md, page_image)
 	new_ps = score_page(page_no, new_md, gt, image_data_url=img, use_judge=use_judge, page_kind=kind)
-	notes = "; ".join(new_ps.notes) if new_ps.notes else None
+	notes = "; ".join([*new_ps.notes, *diagram_notes]) or None
 
 	# Explicit user request → adopt the re-parse as canonical (record the score too).
 	store.set_remediation(page["name"], method, new_md, new_ps, adopted=True, notes=notes)

@@ -13,7 +13,7 @@ defineProps({
 <template>
 	<button
 		type="button"
-		class="flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-sm transition-colors"
+		class="flex max-w-full min-w-0 items-center gap-1.5 rounded-full border px-2.5 py-1 text-sm transition-colors"
 		:class="
 			active
 				? 'border-outline-gray-3 bg-surface-gray-3 text-ink-gray-9'
@@ -25,7 +25,7 @@ defineProps({
 			:style="{ backgroundColor: color }"
 			aria-hidden="true"
 		/>
-		<span class="truncate">{{ label }}</span>
-		<span v-if="count != null" class="text-ink-gray-5">{{ count }}</span>
+		<span class="min-w-0 truncate">{{ label }}</span>
+		<span v-if="count != null" class="shrink-0 text-ink-gray-5">{{ count }}</span>
 	</button>
 </template>

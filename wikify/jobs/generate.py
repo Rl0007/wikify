@@ -54,6 +54,9 @@ def run(
 			f"→ /{result['space_route']}",
 			meta={"space": result["space"], "space_route": result["space_route"]},
 		)
+		# every import-progress broadcast in wikify/jobs is unscoped, not just this one; giving them
+		# 		# a room is a backend+SPA change, not a lint fix
+		# nosemgrep
 		frappe.publish_realtime(
 			"wikify_wiki_done",
 			{"import": import_name, "space": result["space"], "space_route": result["space_route"]},

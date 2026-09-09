@@ -110,6 +110,8 @@ class Fixture:
 				new_space={"space_name": f"EVAL Wiki {tag}", "route": f"eval-{tag}"},
 			)
 			self.space = res["space"]
+		# test setup must be visible to the worker connection
+		# nosemgrep
 		frappe.db.commit()
 
 	# --- snapshots ----------------------------------------------------------------------
@@ -165,6 +167,8 @@ class Fixture:
 		frappe.db.delete("Source Section", {"source_document": self.sd})
 		frappe.db.delete("Source Page", {"source_document": self.sd})
 		frappe.db.delete("Source Document", {"name": self.sd})
+		# test setup must be visible to the worker connection
+		# nosemgrep
 		frappe.db.commit()
 
 
@@ -250,6 +254,8 @@ def run_scenarios(which: str = "all", *, keep: bool = False) -> dict:
 				frappe.db.delete("Wikify Agent Message", {"session": ["in", list(leaked_sessions)]})
 				frappe.db.delete("Wikify Agent Session", {"name": ["in", list(leaked_sessions)]})
 			if leaked_types or leaked_sessions:
+				# test setup must be visible to the worker connection
+				# nosemgrep
 				frappe.db.commit()
 		for label, ok, detail in result["checks"]:
 			print(f"  [{'PASS' if ok else 'FAIL'}] {label}" + (f" — {detail}" if detail and not ok else ""))

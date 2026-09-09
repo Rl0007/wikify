@@ -100,6 +100,11 @@ function fmtDate(d) {
 	if (!d) return "";
 	return new Date(d.replace(" ", "T")).toLocaleString();
 }
+
+// A bare number reads as noise once the row stacks and loses its column header.
+function pageLabel(row) {
+	return row.page_count ? `${row.page_count} pages` : "—";
+}
 </script>
 
 <template>
@@ -168,9 +173,12 @@ function fmtDate(d) {
 		</div>
 
 		<!-- List -->
+		<!-- Four fixed columns leave a phone ~80px for the title, so below sm the row
+		     wraps into stacked lines and the column header (which labels nothing once
+		     they're stacked) drops out. -->
 		<div v-else class="rounded-md border border-outline-gray-1">
 			<div
-				class="flex items-center gap-4 border-b border-outline-gray-1 px-4 py-2 text-sm text-ink-gray-5"
+				class="hidden items-center gap-4 border-b border-outline-gray-1 px-4 py-2 text-sm text-ink-gray-5 sm:flex"
 			>
 				<span class="flex-1">Title</span>
 				<span class="w-40 shrink-0">Status</span>
@@ -180,13 +188,13 @@ function fmtDate(d) {
 			<button
 				v-for="row in imports.data"
 				:key="row.name"
-				class="flex w-full items-center gap-4 border-b border-outline-gray-1 px-4 py-2.5 text-left last:border-b-0 hover:bg-surface-gray-2"
+				class="flex w-full flex-wrap items-center gap-x-4 gap-y-1.5 border-b border-outline-gray-1 px-4 py-2.5 text-left last:border-b-0 hover:bg-surface-gray-2 sm:flex-nowrap"
 				@click="openImport(row.name)"
 			>
-				<span class="flex-1 truncate text-base text-ink-gray-8">{{
+				<span class="w-full truncate text-base text-ink-gray-8 sm:w-auto sm:flex-1">{{
 					row.import_title
 				}}</span>
-				<span class="flex w-40 shrink-0 items-center gap-2">
+				<span class="flex shrink-0 items-center gap-2 sm:w-40">
 					<Badge :label="row.status" :theme="statusTheme(row.status)" variant="subtle" />
 					<Progress
 						v-if="isActive(row.status)"
@@ -195,12 +203,14 @@ function fmtDate(d) {
 						class="w-16"
 					/>
 				</span>
-				<span class="w-16 shrink-0 text-right text-sm text-ink-gray-6">{{
-					row.page_count || "—"
-				}}</span>
-				<span class="w-44 shrink-0 truncate text-right text-sm text-ink-gray-5">{{
-					fmtDate(row.modified)
-				}}</span>
+				<span class="shrink-0 text-sm text-ink-gray-6 sm:w-16 sm:text-right">
+					<span class="sm:hidden">{{ pageLabel(row) }}</span>
+					<span class="hidden sm:inline">{{ row.page_count || "—" }}</span>
+				</span>
+				<span
+					class="ml-auto shrink-0 truncate text-sm text-ink-gray-5 sm:ml-0 sm:w-44 sm:text-right"
+					>{{ fmtDate(row.modified) }}</span
+				>
 			</button>
 		</div>
 	</div>
