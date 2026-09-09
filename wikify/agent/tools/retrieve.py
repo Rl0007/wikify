@@ -1,5 +1,3 @@
-"""Retrieval tool — gives the agent loop genuine multi-hop search."""
-
 from __future__ import annotations
 
 from frappe import _
@@ -8,8 +6,6 @@ from wikify.agent.context import Ctx
 from wikify.agent.registry import Tool
 from wikify.rag import search as rag_search
 
-# Excerpts are trimmed hard — the model pulls the full body with read_section when a hit
-# looks worth reading.
 EXCERPT_LIMIT = 700
 
 
