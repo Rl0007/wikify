@@ -258,6 +258,7 @@ def answer(
 	history: list | None = None,
 	rerank: bool = True,
 	allowed_projects=rag_search.ACL_REQUIRED,
+	decided: Route | None = None,
 	on_route: Callable | None = None,
 	on_citations: Callable | None = None,
 	on_delta: Callable | None = None,
@@ -281,7 +282,11 @@ def answer(
 	model = llm.resolve_model(project=project)
 
 	with usage.collect() as spend:
-		decided = route(question, project, history)
+		# A caller that had to route before it could decide something (`api.rag.ask` keys its
+		# cache on the rewritten query) hands the decision in rather than paying for it twice.
+		# `collect()` nests onto the outer total, so that caller's routing spend is still in
+		# `spend` — the figure has to cover every leg the turn made, wherever it was made.
+		decided = decided or route(question, project, history)
 		if on_route:
 			on_route(decided.as_dict())
 

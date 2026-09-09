@@ -30,6 +30,7 @@ from wikify.rag import answer_cache
 from wikify.rag import history as rag_history
 from wikify.rag import index as rag_index
 from wikify.rag import search as rag_search
+from wikify.rag import usage as rag_usage
 from wikify.rag.router import route as route_question
 
 STREAM_EVENT = "wikify_rag_answer"
@@ -133,33 +134,42 @@ def ask(
 	history = session_history(session)
 	readable = readable_projects()
 	rerank_enabled = sbool(rerank)
-	key = answer_cache.cache_key(
-		question, project, history, rerank_enabled, readable, agent_llm.resolve_model(project=project)
-	)
 
-	cached = answer_cache.get(key)
-	if cached:
-		result = replay_cached_answer(cached, publish)
-	else:
-		result = rag_answer.answer(
-			question,
-			project=project,
-			history=history,
-			rerank=rerank_enabled,
-			allowed_projects=readable,
-			on_route=lambda route: publish({"route": route}),
-			on_citations=lambda citations: publish({"citations": citations}),
-			on_delta=lambda delta: publish({"delta": delta}),
+	# Routing happens here rather than inside `answer()` because the cache is keyed on the
+	# question the router RESOLVES, not the one that was typed — see `answer_cache.cache_key`.
+	# The `collect()` block is what keeps that honest: `answer()` nests onto this total, so a
+	# turn still reports every leg it paid for, and a cache hit reports the routing call it
+	# just made instead of claiming to have cost nothing.
+	with rag_usage.collect() as spend:
+		decided = route_question(question, project, history)
+		publish({"route": decided.as_dict()})
+
+		key = answer_cache.cache_key(
+			decided, project, rerank_enabled, readable, agent_llm.resolve_model(project=project)
 		)
-		# Stored before `took_ms` and `cached` land, so a replay is never billed the
-		# original's clock and never reports itself as the run that paid for the answer.
-		# A refusal is never stored: it can be produced by a transient failure — a missing
-		# key, a reranker returning a flat verdict — rather than by a fact about the
-		# corpus, and a cached one would keep answering "I couldn't find this" for a day
-		# after the cause was fixed. It is also the cheap path, so re-running costs little.
-		if not result["refused"]:
-			answer_cache.set(key, result)
-		result["cached"] = False
+		cached = answer_cache.get(key)
+		if cached:
+			result = replay_cached_answer(cached, publish, spend)
+		else:
+			result = rag_answer.answer(
+				question,
+				project=project,
+				history=history,
+				rerank=rerank_enabled,
+				allowed_projects=readable,
+				decided=decided,
+				on_citations=lambda citations: publish({"citations": citations}),
+				on_delta=lambda delta: publish({"delta": delta}),
+			)
+			# Stored before `took_ms` and `cached` land, so a replay is never billed the
+			# original's clock and never reports itself as the run that paid for the answer.
+			# A refusal is never stored: it can be produced by a transient failure — a missing
+			# key, a reranker returning a flat verdict — rather than by a fact about the
+			# corpus, and a cached one would keep answering "I couldn't find this" for a day
+			# after the cause was fixed. It is also the cheap path, so re-running costs little.
+			if not result["refused"]:
+				answer_cache.set(key, result)
+			result["cached"] = False
 
 	result["took_ms"] = int((time.monotonic() - started) * 1000)
 	publish(
@@ -191,29 +201,24 @@ def ask(
 	return result
 
 
-def replay_cached_answer(cached: dict, publish) -> dict:
+def replay_cached_answer(cached: dict, publish, spend: dict) -> dict:
 	"""Re-emit a cached answer over realtime in the order a live one arrives.
 
 	The interface reads the stream, not the return value, so a cache hit has to publish the
-	same three payloads or the page shows nothing until `done`. The answer goes out as one
-	delta rather than re-chunked: there is no generation to pace, and faking a token stream
-	would spend the very wall clock the cache exists to remove.
+	same payloads or the page shows nothing until `done`. The route has already gone out —
+	the caller had to route to build the key. The answer goes out as one delta rather than
+	re-chunked: there is no generation to pace, and faking a token stream would spend the
+	very wall clock the cache exists to remove.
 
-	Spend is zeroed rather than replayed. This turn made no completion, so reporting the
-	original's cost would overstate what the corpus is costing to run; `cached` is what
-	tells the caller why the price is nothing.
+	Spend is what THIS turn actually cost, which is the routing call and nothing else — not
+	the original's price, and not zero. The synthesis and rerank legs genuinely did not run;
+	the router did, and a cost meter that hides it would understate the corpus the same way
+	the pre-0.7 meter did.
 	"""
-	publish({"route": cached.get("route")})
 	publish({"citations": cached.get("citations") or []})
 	if cached.get("answer"):
 		publish({"delta": cached["answer"]})
-	return {
-		**cached,
-		"cost": 0.0,
-		"prompt_tokens": 0,
-		"completion_tokens": 0,
-		"cached": True,
-	}
+	return {**cached, **spend, "cached": True}
 
 
 def session_history(session: str | None) -> list[dict]:
