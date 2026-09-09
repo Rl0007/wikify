@@ -51,6 +51,7 @@ def make_hit(
 		page_start=3,
 		page_end=4,
 		wiki_route=None,
+		wikify_import=None,
 		score=score,
 		rerank_score=rerank_score,
 		vector_score=vector_score,

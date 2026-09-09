@@ -53,6 +53,7 @@ def make_bare_hit(title: str, score: float = 0.03) -> search.Hit:
 		page_start=1,
 		page_end=1,
 		wiki_route=None,
+		wikify_import=None,
 		score=score,
 	)
 

@@ -65,6 +65,7 @@ def make_hit(section: str, title: str = "", document: str = "Doc", section_type:
 		page_start=1,
 		page_end=2,
 		wiki_route=None,
+		wikify_import=None,
 		score=0.5,
 	)
 
