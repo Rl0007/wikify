@@ -53,12 +53,24 @@ class Ctx:
 		Corpus project" and the model passes that title, but the id is `PRJ-2026-00003`.
 		An unresolved title scoped the query to zero documents, which the model then read
 		as "this content does not exist".
+
+		Resolved through `get_list`, which applies permissions: the model chooses this
+		argument, so an unfiltered lookup would let a prompt widen the agent's scope from
+		the attached project to any project on the site, by title.
 		"""
 		if not explicit:
 			return self.project
-		if frappe.db.exists("Wikify Project", explicit):
-			return explicit
-		return frappe.db.get_value("Wikify Project", {"project_name": explicit}, "name") or self.project
+		# `get_list` raises rather than returning [] for a user with no read on the DocType
+		# at all, and an unresolvable scope must never fail the turn — it falls back.
+		if not frappe.has_permission("Wikify Project", ptype="read"):
+			return self.project
+		matched = frappe.get_list(
+			"Wikify Project",
+			or_filters={"name": explicit, "project_name": explicit},
+			pluck="name",
+			limit=1,
+		)
+		return matched[0] if matched else self.project
 
 	def default_import(self, explicit: str | None = None) -> str | None:
 		"""The Wikify Import owning the (resolved) document — needed by pipeline jobs.

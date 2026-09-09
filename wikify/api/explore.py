@@ -14,6 +14,8 @@ from __future__ import annotations
 import frappe
 from frappe.query_builder.functions import Count
 
+from wikify.api.permission import assert_readable, hidden_documents
+
 UNTAGGED = "__untagged__"  # sentinel for sections classification hasn't reached yet
 
 
@@ -44,7 +46,12 @@ def _counts(scope: list | None) -> dict[str, int]:
 	if scope:
 		field, op, value = scope
 		column = getattr(table, field)
-		query = query.where(column.isin(value) if op == "in" else column == value)
+		if op == "in":
+			query = query.where(column.isin(value))
+		elif op == "not in":
+			query = query.where(column.notin(value))
+		else:
+			query = query.where(column == value)
 	rows = query.run(as_dict=True)
 	return {r["section_type"] or UNTAGGED: r["count"] for r in rows}
 
@@ -56,13 +63,17 @@ def type_summary(source_document: str | None = None, project: str | None = None)
 	Returns every Section Type in display order with its count (incl. zero, so chips are
 	stable), then an `untagged` bucket appended only when some section has no type yet.
 	"""
+	assert_readable(project, source_document)
 	doc_scope = _docs_in_project(project)
 	if source_document:
 		counts = _counts(["source_document", "=", source_document])
 	elif doc_scope is not None:
 		counts = _counts(["source_document", "in", doc_scope]) if doc_scope else {}
 	else:
-		counts = _counts(None)
+		# Unscoped means "everything this user may read", never "everything on the site":
+		# these counts name how much content exists, which is itself something to leak.
+		hidden = hidden_documents()
+		counts = _counts(["source_document", "not in", hidden] if hidden else None)
 
 	types = frappe.get_all(
 		"Section Type",
@@ -102,6 +113,7 @@ def sections_by_type(
 	title then tree position. `section_type` may be the `untagged` sentinel. Scope to a
 	single document (`source_document`) or a project (`project`), else spans all docs.
 	"""
+	assert_readable(project, source_document)
 	filters = _scope(source_document)
 	filters["section_type"] = ["is", "not set"] if section_type == UNTAGGED else section_type
 
@@ -111,6 +123,8 @@ def sections_by_type(
 			if not doc_scope:
 				return []
 			filters["source_document"] = ["in", doc_scope]
+		elif hidden := hidden_documents():
+			filters["source_document"] = ["not in", hidden]
 
 	rows = frappe.get_all(
 		"Source Section",

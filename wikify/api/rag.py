@@ -20,6 +20,11 @@ from frappe import _
 from frappe.utils.data import cint, sbool
 
 from wikify.agent import llm as agent_llm
+from wikify.api.permission import (
+	assert_readable,
+	documents_in_projects,
+	readable_projects,
+)
 from wikify.rag import answer as rag_answer
 from wikify.rag import answer_cache
 from wikify.rag import history as rag_history
@@ -28,31 +33,6 @@ from wikify.rag import search as rag_search
 from wikify.rag.router import route as route_question
 
 STREAM_EVENT = "wikify_rag_answer"
-
-
-def readable_projects() -> list[str]:
-	"""Wikify Projects the current user may read (`get_list` applies permissions).
-
-	A user with no read permission at all gets `[]`, not an exception: an unscoped search
-	must come back empty for them, and `search()` reads an empty ACL list as "no rows".
-	"""
-	if not frappe.has_permission("Wikify Project", ptype="read"):
-		return []
-	return frappe.get_list("Wikify Project", pluck="name", limit_page_length=0)
-
-
-def assert_readable(project: str | None, source_document: str | None = None) -> None:
-	"""Guard an explicit scope: both a project and a document resolve to a project check."""
-	if source_document and not project:
-		project = frappe.db.get_value("Source Document", source_document, "project")
-	if not project:
-		return
-	if not frappe.has_permission("Wikify Project", doc=project):
-		frappe.throw(_("You are not allowed to read {0}.").format(project), frappe.PermissionError)
-
-
-def documents_in_projects(projects: list[str]) -> list[str]:
-	return frappe.get_all("Source Document", filters={"project": ["in", projects]}, pluck="name")
 
 
 @frappe.whitelist()

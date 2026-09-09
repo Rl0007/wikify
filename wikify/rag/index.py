@@ -11,7 +11,7 @@ import time
 
 import frappe
 
-from wikify.rag import chunk, embed, store
+from wikify.rag import chunk, embed, search, store
 
 FTS_COLUMN = "text"
 
@@ -130,20 +130,26 @@ def indexed_at(table) -> str | None:
 	return timestamp.isoformat() if timestamp else None
 
 
-def index_stats(projects: list[str] | None = None) -> dict:
-	"""Counts for the index-status card. `projects=None` covers the whole site.
+def index_stats(projects: list[str] | search.AclDecision = search.ACL_REQUIRED) -> dict:
+	"""Counts for the index-status card, scoped to `projects`.
+
+	Takes the same ACL decision `search()` does, and for the same reason: this reads the
+	chunk table, so an omitted argument would report how much content the reader cannot see.
+	It used to default to `None` — the exact permissive default the `AclDecision` sentinels
+	were introduced to make impossible. `ALL_PROJECTS` is how a background caller opts out.
 
 	One scan for the whole scope, aggregated in Python: asking per project meant a fresh
 	LanceDB connection and a full table read for every project the reader could see, which
 	is the same rows re-scanned N times to produce one card.
 	"""
+	search.assert_acl_decision(projects)
 	table = store.chunks_table()
 	empty = {"chunks": 0, "sections": 0, "documents": 0, "indexed_at": None, "dim": embed.EMBED_DIM}
 	if table is None or projects == []:
 		return empty
 
 	query = table.search().select(["section", "source_document"]).limit(None)
-	if projects is not None:
+	if projects is not search.ALL_PROJECTS:
 		allowed = ", ".join(store.sql_literal(name) for name in projects)
 		query = query.where(f"project IN ({allowed})")
 	rows = query.to_list()

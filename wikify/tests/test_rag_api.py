@@ -17,11 +17,15 @@ from unittest.mock import patch
 import frappe
 from frappe.tests.utils import FrappeTestCase
 
+from wikify.agent import context as agent_context
 from wikify.agent.registry import build_default_registry
+from wikify.api import explore as api_explore
+from wikify.api import permission
 from wikify.api import rag as api_rag
 from wikify.engine import settings
 from wikify.rag import answer as rag_answer
 from wikify.rag import events as rag_events
+from wikify.rag import index as rag_index
 from wikify.rag import rerank as rag_rerank
 from wikify.rag import router as rag_router
 from wikify.rag import search as rag_search
@@ -264,6 +268,89 @@ class TestRagApi(FrappeTestCase):
 		self.assertEqual(result["chunks"], 6)
 		self.assertEqual(result["sections"], 4)
 		self.assertFalse(result["stale"])
+
+
+class TestIndexStatsAcl(FrappeTestCase):
+	"""`index_stats` reads the chunk table, so it takes the same ACL decision `search` does.
+
+	It defaulted to `projects=None` — the permissive default the AclDecision sentinels were
+	introduced to make impossible — and reported chunk, section and document counts for
+	every project on the site to any caller that forgot the argument.
+	"""
+
+	def test_an_omitted_scope_throws_instead_of_counting_the_whole_site(self):
+		with self.assertRaises(frappe.ValidationError):
+			rag_index.index_stats()
+
+	def test_none_is_not_an_opt_out(self):
+		with self.assertRaises(frappe.ValidationError):
+			rag_index.index_stats(None)
+
+	def test_all_projects_is_the_deliberate_opt_out(self):
+		totals = rag_index.index_stats(rag_search.ALL_PROJECTS)
+		self.assertIn("chunks", totals)
+
+	def test_an_empty_acl_counts_nothing(self):
+		self.assertEqual(rag_index.index_stats([])["chunks"], 0)
+
+
+class TestExploreAcl(FrappeTestCase):
+	"""Explore is a metadata read over the same corpus, so it carries the same ACL."""
+
+	def setUp(self):
+		self.project = make_project("Explore ACL")
+		self.document = frappe.get_doc(
+			{
+				"doctype": "Source Document",
+				"title": "Explore ACL Doc",
+				"page_count": 1,
+				"project": self.project.name,
+			}
+		).insert(ignore_permissions=True)
+		self.addCleanup(frappe.set_user, "Administrator")
+
+	def test_an_explicit_unreadable_project_is_refused(self):
+		frappe.set_user("Guest")
+		with self.assertRaises(frappe.PermissionError):
+			api_explore.type_summary(project=self.project.name)
+		with self.assertRaises(frappe.PermissionError):
+			api_explore.sections_by_type("job_description", project=self.project.name)
+
+	def test_an_unscoped_read_excludes_documents_the_user_cannot_see(self):
+		frappe.set_user("Guest")
+		hidden = permission.hidden_documents()
+		self.assertIn(self.document.name, hidden)
+
+	def test_a_project_less_document_stays_visible(self):
+		"""The fix subtracts unreadable projects; it must not hide content with no project.
+
+		A document outside every project carries no permission statement, and scoping to
+		documents-in-readable-projects would have hidden it as a side effect.
+		"""
+		orphan = frappe.get_doc(
+			{"doctype": "Source Document", "title": "No Project Doc", "page_count": 1}
+		).insert(ignore_permissions=True)
+		frappe.set_user("Guest")
+		self.assertNotIn(orphan.name, permission.hidden_documents())
+
+
+class TestAgentProjectScope(FrappeTestCase):
+	"""The model chooses `project`, so resolving it must apply permissions."""
+
+	def setUp(self):
+		self.project = make_project("Agent Scope")
+		self.addCleanup(frappe.set_user, "Administrator")
+
+	def test_a_readable_project_still_resolves_by_title(self):
+		ctx = agent_context.Ctx(session="S", user="Administrator")
+		self.assertEqual(ctx.default_project(self.project.project_name), self.project.name)
+
+	def test_an_unreadable_project_does_not_resolve_by_title(self):
+		"""Otherwise a prompt widens the agent from its attached project to any on the site."""
+		frappe.set_user("Guest")
+		ctx = agent_context.Ctx(session="S", user="Guest", project=None)
+		self.assertIsNone(ctx.default_project(self.project.project_name))
+		self.assertIsNone(ctx.default_project(self.project.name))
 
 
 class TestRagApiAgainstTheRealIndex(FrappeTestCase):
