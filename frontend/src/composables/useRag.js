@@ -1,6 +1,6 @@
-// Data layer for the RAG surfaces (/ask and /rag-lab) — thin wrappers over the
-// `wikify.api.rag.*` contract. Every call degrades gracefully: the backend may not be
-// deployed yet, so callers get `errorText` instead of an exception.
+// Data layer for the /ask RAG surface — thin wrappers over the `wikify.api.rag.*`
+// contract. Every call degrades gracefully: the backend may not be deployed yet, so
+// callers get `errorText` instead of an exception.
 import { computed, ref, watch } from "vue";
 import { useCall, useList } from "frappe-ui";
 import { useSocket } from "@/socket";
@@ -48,11 +48,10 @@ export function isUnrankedSet(hits) {
 	return scores.length > 1 && scores.every((score) => score === scores[0]);
 }
 
-// The project scope selector, shared by /ask and /rag-lab so the two pages can't drift.
-// The rows are held once at module scope and the last non-empty list is kept: a reload
-// empties `data` for a beat, and with no options to match against, the select falls back
-// to its "Select option" placeholder — so the scope the user chose appears to clear itself
-// mid-answer.
+// The project scope selector for /ask. The rows are held once at module scope and the
+// last non-empty list is kept: a reload empties `data` for a beat, and with no options to
+// match against, the select falls back to its "Select option" placeholder — so the scope
+// the user chose appears to clear itself mid-answer.
 let projectList = null;
 const lastProjectRows = ref([]);
 const projectOptions = computed(() => [

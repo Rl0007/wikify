@@ -6,7 +6,6 @@ import { computed, nextTick, onUnmounted, ref, watch } from "vue";
 import { Button, FormControl, PageHeader } from "frappe-ui";
 import MarkdownPreview from "@/components/MarkdownPreview.vue";
 import CostMeter from "@/components/rag/CostMeter.vue";
-import RouteBadge from "@/components/rag/RouteBadge.vue";
 import SourceCard from "@/components/rag/SourceCard.vue";
 import { isUnrankedSet, relevanceBasis, useProjectOptions, useRagAsk } from "@/composables/useRag";
 
@@ -150,10 +149,6 @@ function handleAnswerClick(event) {
 		>
 			The connection dropped mid-answer — showing everything that streamed in.
 		</p>
-
-		<div v-if="hasResult && (route || streaming)" class="mt-4">
-			<RouteBadge :route="route" :loading="streaming && !route" />
-		</div>
 
 		<div
 			v-if="!hasResult && !failed"

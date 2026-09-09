@@ -1,6 +1,7 @@
 <script setup>
 import {
 	BottomSheet,
+	Button,
 	DesktopShell,
 	MobileNav,
 	MobileNavItem,
@@ -8,7 +9,7 @@ import {
 	Sidebar,
 } from "frappe-ui";
 import { computed, onMounted, ref, watch } from "vue";
-import { RouterLink, useRoute } from "vue-router";
+import { useRoute } from "vue-router";
 import { useTheme } from "@/utils/useTheme";
 import { useIsMobile } from "@/composables/useMediaQuery";
 import { session } from "@/data/session";
@@ -23,7 +24,8 @@ const BUG_REPORT_URL = "https://github.com/bwhtech/wikify/issues/new";
 
 const settingsOpen = ref(false);
 const mobileMenuOpen = ref(false);
-// The agent panel is mounted once here so it's available on every screen (slice 12).
+// The agent panel + its floating button are mounted once here so they're available on
+// every screen (slice 12). On mobile the floating button is replaced by a MobileNav tab.
 const agentOpen = ref(false);
 
 const menuItems = computed(() => [
@@ -80,31 +82,9 @@ const destinations = computed(() => [
 		to: { name: "AskWiki" },
 		isActive: route.name === "AskWiki",
 	},
-	{
-		label: "RAG Lab",
-		icon: "lucide-flask-conical",
-		to: { name: "RagLab" },
-		isActive: route.name === "RagLab",
-	},
 ]);
 
-// The assistant is an action, not a route, so it gets its own group under the
-// destinations. It used to be a floating button pinned to the viewport corner, which
-// covered card actions ("Open in wiki") on every screen narrower than a desktop.
-const sections = computed(() => [
-	{ label: "", items: destinations.value },
-	{
-		label: "",
-		items: [
-			{
-				label: "Assistant",
-				icon: "lucide-sparkles",
-				active: agentOpen.value,
-				onClick: () => (agentOpen.value = true),
-			},
-		],
-	},
-]);
+const sections = computed(() => [{ label: "", items: destinations.value }]);
 
 // Full-height, multi-pane routes own their own scroll (graph canvas, split review,
 // tabbed import). Everything else scrolls as one page inside the shell's scroll area.
@@ -155,12 +135,10 @@ onMounted(initializeTheme);
 						:active="agentOpen"
 						@click="agentOpen = true"
 					/>
-					<!-- Five tabs is the most that stays legible at 360px, so the least-used
-					     destination (RAG Lab) lives one tap deeper, inside this sheet. -->
 					<MobileNavItem
-						label="More"
+						label="Menu"
 						icon="lucide-menu"
-						:active="mobileMenuOpen || route.name === 'RagLab'"
+						:active="mobileMenuOpen"
 						@click="mobileMenuOpen = true"
 					/>
 				</MobileNav>
@@ -190,27 +168,9 @@ onMounted(initializeTheme);
 
 		<AppSettingsDialog v-model:open="settingsOpen" />
 
-		<!-- Mobile overflow sheet: the destinations that don't fit the tab bar, then the
-		     user actions (settings / theme / logout). -->
+		<!-- Mobile overflow menu (settings / theme / logout). -->
 		<BottomSheet v-model:open="mobileMenuOpen" title="Wikify">
 			<div class="flex flex-col px-2 pb-6">
-				<RouterLink
-					v-for="destination in destinations"
-					:key="destination.label"
-					:to="destination.to"
-					class="flex items-center gap-3 rounded-md px-3 py-3 text-base active:bg-surface-gray-2"
-					:class="destination.isActive ? 'text-ink-gray-9' : 'text-ink-gray-8'"
-					@click="mobileMenuOpen = false"
-				>
-					<span
-						:class="[destination.icon, 'size-5 text-ink-gray-6']"
-						aria-hidden="true"
-					/>
-					{{ destination.label }}
-				</RouterLink>
-
-				<div class="my-2 border-t border-outline-gray-1" />
-
 				<button
 					v-for="item in menuItems"
 					:key="item.label"
@@ -223,6 +183,18 @@ onMounted(initializeTheme);
 			</div>
 		</BottomSheet>
 
+		<!-- Floating assistant button (desktop only — mobile uses the nav tab). It sits
+		     bottom-right, which on any screen narrower than desktop would sit on top of
+		     card actions like "Open in wiki"; the `!isMobile` guard is what keeps it clear. -->
+		<Button
+			v-if="!isMobile"
+			v-show="!agentOpen"
+			variant="solid"
+			icon="lucide-sparkles"
+			class="fixed bottom-5 right-5 z-30 !size-11 !rounded-full shadow-lg"
+			tooltip="Ask the assistant"
+			@click="agentOpen = true"
+		/>
 		<AgentChatPanel v-model:open="agentOpen" />
 	</div>
 </template>
