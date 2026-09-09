@@ -48,6 +48,28 @@ export function isUnrankedSet(hits) {
 	return scores.length > 1 && scores.every((score) => score === scores[0]);
 }
 
+// The chosen scope survives a reload — re-picking the project on every visit is the most
+// repeated action on this page. Per-browser and per-viewer by nature, so it never travels
+// between users; a browser with site data blocked simply doesn't remember.
+const PROJECT_STORAGE_KEY = "wikify:ask:project";
+
+function storedProject() {
+	try {
+		return window.localStorage.getItem(PROJECT_STORAGE_KEY) || "";
+	} catch {
+		return "";
+	}
+}
+
+function rememberProject(value) {
+	try {
+		if (value) window.localStorage.setItem(PROJECT_STORAGE_KEY, value);
+		else window.localStorage.removeItem(PROJECT_STORAGE_KEY);
+	} catch {
+		// Nothing to do: the scope just won't be remembered next time.
+	}
+}
+
 // The project scope selector for /ask. The rows are held once at module scope and the
 // last non-empty list is kept: a reload empties `data` for a beat, and with no options to
 // match against, the select falls back to its "Select option" placeholder — so the scope
@@ -70,9 +92,16 @@ export function useProjectOptions() {
 		watch(
 			() => projectList.data,
 			(rows) => {
-				if (rows?.length) lastProjectRows.value = rows;
+				if (!rows?.length) return;
+				lastProjectRows.value = rows;
+				// A remembered project the viewer can no longer see — deleted, or permissions
+				// changed — must not stay selected: `ask` refuses an unreadable scope outright,
+				// so it would fail every question until they noticed the stale select.
+				if (project.value && !rows.some((row) => row.name === project.value)) {
+					project.value = "";
+				}
 			},
-			{ immediate: true }
+			{ immediate: true },
 		);
 	}
 	return projectOptions;
@@ -82,7 +111,7 @@ export function useProjectOptions() {
 // breakpoint change, and a remount must not throw away the question, the project scope or
 // the results the user is reading.
 const question = ref("");
-const project = ref("");
+const project = ref(storedProject());
 const askedQuestion = ref("");
 const sources = ref([]);
 const answerText = ref("");
@@ -104,15 +133,16 @@ const conversationId = ref(null);
 // A conversation is scoped to the project it was opened against, so switching projects
 // starts a new one — otherwise the next follow-up would be rewritten against turns about
 // documents the user is no longer looking at.
-watch(project, () => {
+watch(project, (value) => {
 	conversationId.value = null;
+	rememberProject(value);
 });
 
 // True when the request failed and nothing was retrieved. The page must then show the
 // failure alone — empty "Sources 0 / No answer" panels would claim a search happened and
 // came back empty.
 const failed = computed(
-	() => Boolean(errorText.value) && !sources.value.length && !answerText.value
+	() => Boolean(errorText.value) && !sources.value.length && !answerText.value,
 );
 
 // The request itself is module state too, and for a stronger reason than the results:
