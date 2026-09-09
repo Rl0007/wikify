@@ -1,0 +1,10 @@
+# `relaxed-permissions` fires on `"role": "All"`, which these two carry deliberately: an Ask
+# conversation is owned by the user who started it, so the row is `All` + `if_owner` — the
+# same shape frappe core uses for a user's own rows (24 of its doctypes do this; they escape
+# the rule only because `semgrep ci` scans changed files and they are not new). JSON takes no
+# `# nosemgrep` comment, so the exemption has to live here.
+#
+# What stops a Website User spending on this is not the DocType row but `api.rag.ask`, which
+# throws before it routes when the caller may read no wiki.
+wikify/wikify/doctype/wikify_ask_session/wikify_ask_session.json
+wikify/wikify/doctype/wikify_ask_message/wikify_ask_message.json
