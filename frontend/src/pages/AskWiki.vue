@@ -115,14 +115,18 @@ watch(
 	},
 );
 
-// Openers for a reader who has nothing to type yet. Deliberately generic: the scope can be
-// one project or all of them, so a suggestion can't name a document and still be true.
-// They live inside the empty state, which means the first turn retires them on its own.
-const SAMPLE_QUESTIONS = [
-	"What does this wiki cover?",
-	"Summarise the key sections",
-	"What is still open or unresolved?",
-];
+// Openers for a reader who has nothing to type yet. They live inside the empty state, so
+// the first turn retires them on its own.
+//
+// Each one is measured against the live index rather than guessed: retrieval applies a
+// relevance floor, and a suggestion the wiki answers with "not in this wiki" is worse than
+// no suggestion at all. Questions *about* the wiki retrieve badly — "Summarise the key
+// sections" (rerank 2.8), "What is still open or unresolved?" (1.7) and "What are the main
+// topics?" (2.7) all sat under the 3.0 floor. Questions *of* it clear the floor easily:
+// these three measured 4.3, filter-mode (no floor) and 6.1.
+// ponytail: measured on this corpus, so a very different one could drift under the floor
+// again; re-probe from the eval harness if the suggestions start refusing.
+const SAMPLE_QUESTIONS = ["Give me an overview", "List the main sections", "What are the rules?"];
 
 function askSample(text) {
 	if (streaming.value) return;
@@ -160,12 +164,25 @@ watch(conversationId, (id) => {
 });
 
 // The other direction: a deep link on load, and the back/forward buttons after it.
+// A deep link arrives with no turns loaded, so without this flag the landing — greeting,
+// composer, suggestions — paints for the length of the fetch and is then replaced by the
+// thread. That flash reads as "new chat", the opposite of what the link said.
+const restoringSession = ref(false);
+
 watch(
 	() => route.params.conversationId || "",
-	(id) => {
+	async (id) => {
 		if (id === (conversationId.value || "")) return;
-		if (id) loadSession(id);
-		else newConversation();
+		if (!id) {
+			newConversation();
+			return;
+		}
+		restoringSession.value = true;
+		try {
+			await loadSession(id);
+		} finally {
+			restoringSession.value = false;
+		}
 	},
 	{ immediate: true },
 );
@@ -207,7 +224,7 @@ watch(
 				     way a conversation starts rather than the way a log ends. The first turn
 				     moves it to the bottom (below), where a follow-up belongs. -->
 				<div
-					v-if="!hasTurns"
+					v-if="!hasTurns && !restoringSession"
 					class="flex min-h-0 flex-1 flex-col items-center justify-center gap-6 px-4 sm:px-6"
 				>
 					<h2
@@ -227,7 +244,7 @@ watch(
 						<span class="leading-none">{{ greeting }}</span>
 					</h2>
 
-					<AskComposer class="w-full max-w-3xl" />
+					<AskComposer class="w-full max-w-3xl" :pinned="false" />
 
 					<div class="flex flex-col items-center gap-3">
 						<div class="flex flex-wrap justify-center gap-2">
@@ -257,6 +274,20 @@ watch(
 						<div
 							class="mx-auto flex w-full max-w-3xl flex-col gap-8 px-4 py-6 sm:px-6"
 						>
+							<!-- Shaped like the turn it is about to become — a question bubble on
+							     the right, an answer block under it — so the thread does not jump
+							     when the real one arrives. -->
+							<div
+								v-if="restoringSession && !hasTurns"
+								class="flex animate-pulse flex-col gap-3"
+								aria-hidden="true"
+							>
+								<div class="h-8 w-56 self-end rounded-lg bg-surface-gray-3" />
+								<div class="mt-2 h-4 w-full rounded bg-surface-gray-2" />
+								<div class="h-4 w-11/12 rounded bg-surface-gray-2" />
+								<div class="h-4 w-3/4 rounded bg-surface-gray-2" />
+								<div class="mt-3 h-4 w-40 rounded bg-surface-gray-2" />
+							</div>
 							<AnswerTurn
 								v-for="turn in turns"
 								:key="turn.id"
@@ -272,7 +303,7 @@ watch(
 					     card in the transcript's own column rather than an edge-to-edge footer, and
 					     the bottom padding keeps it off the shell's rounded corner. -->
 					<div class="shrink-0 bg-surface-base px-4 pb-4 sm:px-6">
-						<AskComposer class="mx-auto w-full max-w-3xl" />
+						<AskComposer class="mx-auto w-full max-w-3xl" :pinned="true" />
 					</div>
 				</template>
 			</div>

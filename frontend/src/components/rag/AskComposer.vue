@@ -3,16 +3,20 @@
 // thread, pinned to the bottom once turns exist — so it lives here rather than being
 // written twice. useRagAsk's state is module-scoped, so this shares the page's refs
 // instead of plumbing them through props.
-import { computed } from "vue";
 import { Button, Textarea } from "frappe-ui";
 import { useRagAsk } from "@/composables/useRag";
 
-const { question, turns, streaming, ask } = useRagAsk();
+// Placement comes from the page, which is the only thing that knows it. Inferring it from
+// the turn count instead gets a restored conversation wrong: its turns arrive after the
+// fetch, so the composer would wear its landing face under a thread that is already there.
+// On the landing the input is the whole invitation and Enter sends it, so a button beside
+// it is one more thing to read; pinned under a thread it earns its place as the send
+// affordance.
+defineProps({
+	pinned: { type: Boolean, default: false },
+});
 
-// The same condition that decides where the page puts this composer. On the landing the
-// input is the whole invitation and Enter sends it, so a button beside it is one more
-// thing to read; once the thread is running it earns its place as the send affordance.
-const pinnedToBottom = computed(() => turns.value.length > 0);
+const { question, streaming, ask } = useRagAsk();
 
 // Enter sends, Shift+Enter breaks the line — the composer is a textarea so a long question
 // can be composed, but the common case is one line and a send.
@@ -35,11 +39,11 @@ function handleKeydown(event) {
 			:rows="1"
 			variant="ghost"
 			class="max-h-40 flex-1 resize-none bg-transparent"
-			:placeholder="pinnedToBottom ? 'Ask a follow-up…' : 'Ask a question of this wiki…'"
+			:placeholder="pinned ? 'Ask a follow-up…' : 'Ask a question of this wiki…'"
 			@keydown="handleKeydown"
 		/>
 		<Button
-			v-if="pinnedToBottom"
+			v-if="pinned"
 			class="shrink-0"
 			variant="solid"
 			icon="lucide-arrow-up"
