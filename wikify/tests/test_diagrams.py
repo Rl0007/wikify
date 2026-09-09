@@ -96,9 +96,26 @@ class TestMermaidGate(unittest.TestCase):
 	def test_rejected_block_falls_back_to_the_source_crop(self):
 		markdown = f"# Surcharge\n\n```mermaid\n{FLATTENED_TABLE_MERMAID}```\n"
 		cleaned, notes = diagrams.remove_unverified_diagrams(markdown, "/files/page-0011.png")
-		self.assertNotIn("mermaid", cleaned)
+		self.assertNotIn("```mermaid", cleaned)
+		self.assertIn("```text", cleaned)
 		self.assertIn("![Source region](/files/page-0011.png)", cleaned)
 		self.assertTrue(notes)
+
+	def test_a_rejected_diagram_is_demoted_not_deleted(self):
+		"""The gate has a known false-positive class, so rejection must never lose content.
+
+		Any fan of three bare values trips MIN_VALUE_LEAVES — on a rate referencer that is
+		most flowcharts — and a deleted block is unrecoverable.
+		"""
+		markdown = f"```mermaid\n{FLATTENED_TABLE_MERMAID}```\n"
+		cleaned, notes = diagrams.remove_unverified_diagrams(markdown, "")
+
+		self.assertNotIn("```mermaid", cleaned)
+		self.assertIn("```text", cleaned)
+		self.assertIn("Diagram not rendered", cleaned)
+		for line in FLATTENED_TABLE_MERMAID.strip().splitlines():
+			self.assertIn(line.strip(), cleaned)
+		self.assertTrue(any("mermaid rejected" in note for note in notes))
 
 	def test_a_surviving_table_needs_no_crop(self):
 		markdown = f"| Slab | Rate |\n|---|---|\n| A | 10% |\n\n```mermaid\n{FLATTENED_TABLE_MERMAID}```\n"
@@ -170,7 +187,7 @@ class TestLabelRepair(unittest.TestCase):
 		"""Quoting fixes syntax, never meaning — an unbound grid is still rejected."""
 		markdown = f"# Surcharge\n\n```mermaid\n{FLATTENED_TABLE_MERMAID}```\n"
 		cleaned, notes = diagrams.remove_unverified_diagrams(markdown, "/files/page-0011.png")
-		self.assertNotIn("mermaid", cleaned)
+		self.assertNotIn("```mermaid", cleaned)
 		self.assertTrue(any("mermaid rejected" in note for note in notes))
 
 	def test_nothing_but_a_flattened_grid_is_dropped(self):

@@ -280,9 +280,22 @@ def has_table(markdown: str) -> bool:
 	return sum(1 for line in text.splitlines() if line.strip().startswith("|")) >= 2
 
 
+def demoted(source: str, reason: str) -> str:
+	"""A rejected diagram as inert source, never as nothing.
+
+	Rejection is a judgement about meaning, and it has a known false-positive class: any fan
+	of three bare values trips `MIN_VALUE_LEAVES`, which on a rate referencer is most
+	flowcharts. Deleting the block on that judgement destroys the model's structured read of
+	the page and there is no way back to it. Demoting it to a plain fence keeps the content
+	visible and unrenderable, which is exactly what this module already does for a diagram
+	the reader's parser rejects on syntax.
+	"""
+	return f"> Diagram not rendered — {reason}.\n\n```text\n{source.strip()}\n```"
+
+
 def remove_unverified_diagrams(markdown: str, fallback_image_url: str = "") -> tuple[str, list[str]]:
-	"""Repair what can be repaired, drop every mermaid block that still fails the gate; return
-	(markdown, notes).
+	"""Repair what can be repaired, demote every mermaid block that still fails the gate;
+	return (markdown, notes).
 
 	When the rejection leaves the page with no grid at all, the page/region crop is embedded so
 	the content is still readable — a picture of the truth beats a well-formed lie.
@@ -301,7 +314,7 @@ def remove_unverified_diagrams(markdown: str, fallback_image_url: str = "") -> t
 		if errors:
 			rejected += 1
 			notes.append(f"mermaid rejected: {errors[0]}")
-			return ""
+			return demoted(repaired, errors[0])
 		if repaired != source:
 			notes.append("mermaid repaired: node labels quoted")
 			return match.group(0).replace(source, repaired, 1)
