@@ -1,16 +1,3 @@
-"""Whitelisted APIs for retrieval + grounded answering (POC-2 phase 1).
-
-Five methods: `search` (the three legs), `ask` (grounded, streamed, cited), `index_status`,
-`reindex`, and `compare` — the demo punchline that runs the same query as naive top-k
-vector search *and* as the routed hybrid, so the interface can show what naive retrieval
-missed.
-
-Permissions: every read path resolves the projects the user may read and hands them to
-`search()` as a pre-filter, so the ACL is applied inside the store's `where` clause rather
-than by trimming rows after the fact — a post-hoc trim would let an unreadable project's
-chunks consume the top-k budget and silently starve the answer.
-"""
-
 from __future__ import annotations
 
 import time
@@ -36,14 +23,13 @@ from wikify.rag.router import route as route_question
 STREAM_EVENT = "wikify_rag_answer"
 
 DEFAULT_LIMIT = 8
-# `limit` widens the candidate list (`search.CANDIDATE_MULTIPLIER`), and with the reranker
-# on every candidate is a 512-token cross-encoder forward pass on the web worker, inside the
-# request. Unbounded, that is an authenticated way to spend the whole box on one call.
+# `limit` widens the candidate list, and with the reranker on every candidate is a 512-token
+# cross-encoder forward pass on the web worker inside the request. Unbounded, that is an
+# authenticated way to spend the whole box on one call.
 MAX_LIMIT = 100
 
 
 def clamped_limit(limit) -> int:
-	"""A caller-supplied `limit`, bounded. See `MAX_LIMIT` for why it cannot be open-ended."""
 	return min(cint(limit) or DEFAULT_LIMIT, MAX_LIMIT)
 
 
@@ -58,12 +44,6 @@ def search(
 	rerank: bool = False,
 	use_router: bool = True,
 ) -> dict:
-	"""Retrieve chunks for a query.
-
-	The router runs by default and supplies the `section_type` filter when the caller did
-	not name one; an explicit `mode` is always honoured. Pass `use_router=False` for a raw,
-	unrouted leg (what `compare`'s naive side needs) — `route` then comes back as null.
-	"""
 	query = (query or "").strip()
 	if not query:
 		frappe.throw(_("Enter something to search for."))
@@ -101,25 +81,6 @@ def ask(
 	stream: str | None = None,
 	rerank: bool = True,
 ) -> dict:
-	"""Answer a question from the wiki, with citations, streaming as it goes.
-
-	`stream` and `session` are different things and are not interchangeable. `stream` is a
-	caller-minted correlation token, echoed on every realtime payload so one tab can pick
-	its own deltas off a per-user channel; the server never stores it. `session` is a
-	`Wikify Ask Session` docname — absent on the first ask of a conversation, and returned
-	so the caller can send it back to make the next question a follow-up.
-
-	Realtime on `wikify_rag_answer` mirrors the agent loop's ordering: the route lands
-	first (the interface shows *why* this retrieval strategy), then the sources, then the
-	answer deltas, then `done` — which carries what the turn cost, so the price can be
-	shown the moment the answer finishes. The same payload is also returned, so a caller
-	that isn't listening still gets the whole answer.
-
-	A repeat of the same question is served from `answer_cache` and publishes the identical
-	sequence, with `cached: True` and zero spend. The cache is exact-match and keyed on the
-	store's write counter, so it cannot outlive the corpus it answered from — see that
-	module for why it is not keyed by similarity.
-	"""
 	question = (question or "").strip()
 	if not question:
 		frappe.throw(_("Ask a question."))
@@ -135,11 +96,6 @@ def ask(
 	readable = readable_projects()
 	rerank_enabled = sbool(rerank)
 
-	# Routing happens here rather than inside `answer()` because the cache is keyed on the
-	# question the router RESOLVES, not the one that was typed — see `answer_cache.cache_key`.
-	# The `collect()` block is what keeps that honest: `answer()` nests onto this total, so a
-	# turn still reports every leg it paid for, and a cache hit reports the routing call it
-	# just made instead of claiming to have cost nothing.
 	with rag_usage.collect() as spend:
 		decided = route_question(question, project, history)
 		publish({"route": decided.as_dict()})
@@ -147,6 +103,9 @@ def ask(
 		key = answer_cache.cache_key(
 			decided, project, rerank_enabled, readable, agent_llm.resolve_model(project=project)
 		)
+		# A refusal is never stored: it can come from a transient failure — a missing key, a
+		# reranker returning a flat verdict — rather than from a fact about the corpus, and a
+		# cached one would keep answering "I couldn't find this" for a day after the fix.
 		cached = answer_cache.get(key)
 		if cached:
 			result = replay_cached_answer(cached, publish, spend)
@@ -161,12 +120,6 @@ def ask(
 				on_citations=lambda citations: publish({"citations": citations}),
 				on_delta=lambda delta: publish({"delta": delta}),
 			)
-			# Stored before `took_ms` and `cached` land, so a replay is never billed the
-			# original's clock and never reports itself as the run that paid for the answer.
-			# A refusal is never stored: it can be produced by a transient failure — a missing
-			# key, a reranker returning a flat verdict — rather than by a fact about the
-			# corpus, and a cached one would keep answering "I couldn't find this" for a day
-			# after the cause was fixed. It is also the cheap path, so re-running costs little.
 			if not result["refused"]:
 				answer_cache.set(key, result)
 			result["cached"] = False
@@ -184,9 +137,6 @@ def ask(
 			"cached": result["cached"],
 		}
 	)
-	# The log is the product's own eval set: route decisions and citations are what let us
-	# ask later which questions were routed wrong. A logging failure must never cost the
-	# user an answer they already have.
 	try:
 		result["session"] = rag_history.record_turn(
 			session,
@@ -202,19 +152,10 @@ def ask(
 
 
 def replay_cached_answer(cached: dict, publish, spend: dict) -> dict:
-	"""Re-emit a cached answer over realtime in the order a live one arrives.
-
-	The interface reads the stream, not the return value, so a cache hit has to publish the
-	same payloads or the page shows nothing until `done`. The route has already gone out —
-	the caller had to route to build the key. The answer goes out as one delta rather than
-	re-chunked: there is no generation to pace, and faking a token stream would spend the
-	very wall clock the cache exists to remove.
-
-	Spend is what THIS turn actually cost, which is the routing call and nothing else — not
-	the original's price, and not zero. The synthesis and rerank legs genuinely did not run;
-	the router did, and a cost meter that hides it would understate the corpus the same way
-	the pre-0.7 meter did.
-	"""
+	# The interface renders the stream, not the return value, so a hit must publish the same
+	# payloads a live answer does. One delta, not a faked token stream: there is no generation
+	# to pace, and pacing it would spend the wall clock the cache exists to remove. `spend` is
+	# what THIS turn cost — the routing call — never the original's price and never zero.
 	publish({"citations": cached.get("citations") or []})
 	if cached.get("answer"):
 		publish({"delta": cached["answer"]})
@@ -222,21 +163,11 @@ def replay_cached_answer(cached: dict, publish, spend: dict) -> dict:
 
 
 def session_history(session: str | None) -> list[dict]:
-	"""Prior turns of an Ask conversation, so the router can rewrite follow-up questions.
-
-	Delegates to `rag.history`, which owns the Ask session doctypes and drops an unreadable
-	session rather than replaying someone else's conversation into the router prompt.
-	"""
 	return rag_history.recent_turns(session)
 
 
 @frappe.whitelist()
 def index_status(project: str | None = None) -> dict:
-	"""Index counts plus whether sections have changed since the index was written.
-
-	Unscoped, this reports the union of the projects the user may read rather than the
-	whole site — the card must not tell someone how much content they cannot see.
-	"""
 	assert_readable(project)
 	projects = [project] if project else readable_projects()
 	totals = rag_index.index_stats(projects)
@@ -245,7 +176,6 @@ def index_status(project: str | None = None) -> dict:
 
 
 def is_stale(projects: list[str], indexed_at) -> bool:
-	"""True when any in-scope section was edited after the index was last written."""
 	if not indexed_at:
 		return True
 	if not projects:
@@ -259,7 +189,6 @@ def is_stale(projects: list[str], indexed_at) -> bool:
 
 @frappe.whitelist(methods=["POST"])
 def reindex(project: str) -> dict:
-	"""Rebuild a project's index in the background (embedding the corpus is slow)."""
 	if not frappe.has_permission("Wikify Project", ptype="write", doc=project):
 		frappe.throw(_("You are not allowed to reindex {0}.").format(project), frappe.PermissionError)
 	job = frappe.enqueue(
@@ -274,12 +203,6 @@ def reindex(project: str) -> dict:
 
 @frappe.whitelist(methods=["POST"])
 def compare(query: str, project: str | None = None) -> dict:
-	"""The demo punchline: naive top-k vector search beside the routed strategy.
-
-	Same query, same corpus, same ACL. The naive leg is what a textbook RAG pipeline
-	returns; the routed leg follows the router's decision — for an "all X" question that
-	is an exhaustive metadata filter, which is where the recall gap shows up.
-	"""
 	query = (query or "").strip()
 	if not query:
 		frappe.throw(_("Enter a query to compare."))
@@ -290,7 +213,5 @@ def compare(query: str, project: str | None = None) -> dict:
 		"naive": [hit.as_dict() for hit in comparison["naive"]],
 		"routed": [hit.as_dict() for hit in comparison["routed"]],
 		"route": comparison["route"].as_dict(),
-		# The headline number: the sections the routed leg found that naive top-k never saw.
-		# Precomputed here so the interface can highlight them without re-deriving the diff.
 		"missed_by_naive": [hit.section for hit in comparison["missed_by_naive"]],
 	}

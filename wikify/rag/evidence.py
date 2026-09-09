@@ -1,23 +1,3 @@
-"""Span-level grounding — the seam that turns a citation into something checkable.
-
-A citation that names a page *range* is not verifiable: a student who is told "surcharge is
-25%, see pages 10-12" still has to read three pages to find out whether the answer is true.
-Worse, a model can invent a quote and the range will happily "support" it. This module
-closes both holes with the same machinery:
-
-- `locate_quote` finds a near-verbatim quote inside a source and returns its exact line and
-  character span. Matching is done on a normalised projection of both texts (whitespace,
-  unicode dashes, smart quotes, the rupee sign, markdown emphasis, digit group separators),
-  with offsets mapped back to the ORIGINAL text — so the line number we report is the line
-  number in the document, not in some cleaned-up copy.
-- `resolve_page` picks the single page a piece of text actually came from, by token-shingle
-  overlap against each candidate page's own markdown. When two pages are too close to call
-  it says so instead of guessing.
-- `verify_citations` runs every quote the model produced against the source it was
-  attributed to. A quote that cannot be located is reported `unverified`. The UI must never
-  render an unverified citation as confirmed — that is the whole point of the module.
-"""
-
 from __future__ import annotations
 
 import re
@@ -109,11 +89,6 @@ FIGURES_DIFFER = "quote misstates a figure in the cited source"
 
 
 def normalise(text: str) -> tuple[str, list[int]]:
-	"""Fold `text` for matching and return it with a per-character map back to the original.
-
-	The map is what makes the result verifiable: every offset we ever report is an index
-	into the caller's own string, so the line we print is the line they can go and read.
-	"""
 	normalised: list[str] = []
 	offsets: list[int] = []
 	source = text or ""
@@ -153,15 +128,11 @@ def normalise(text: str) -> tuple[str, list[int]]:
 			pending_space = False
 		normalised.extend(mapped)
 		offsets.extend([index] * len(mapped))
-		# An expansion is a word in its own right: without the break, "₹2" tokenises as the
-		# single token "rs2" and stops matching the "Rs. 2" the same figure is written as
-		# elsewhere in the same document.
 		pending_space = char in EXPANDED_CHARS
 	return "".join(normalised), offsets
 
 
 def tokens_with_offsets(normalised: str, offsets: list[int]) -> list[tuple[str, int, int]]:
-	"""(token, original start, original end-exclusive) for every word in a normalised text."""
 	return [
 		(match.group(0), offsets[match.start()], offsets[match.end() - 1] + 1)
 		for match in TOKEN_PATTERN.finditer(normalised)
@@ -174,28 +145,11 @@ def get_tokens(text: str) -> list[str]:
 
 
 def get_figures(text: str) -> list[str]:
-	"""The load-bearing symbols of `text`, in order — rates, statutory references, signs.
-
-	Compared for exact equality, so this is deliberately computed on the normalised
-	projection: "Rs. 1,00,000" and "₹1,00,000" must agree (both fold to the figure "100000"),
-	while 4% and 6% must not.
-	"""
 	normalised, _ = normalise(text)
 	return FIGURE_PATTERN.findall(normalised)
 
 
 def figure_window(quote: str, source: str, char_start: int, char_end: int) -> str:
-	"""The matched span, widened by as much punctuation as the quote carries at its own edges.
-
-	A span runs from its first matched token to its last, so a figure written as trailing
-	punctuation falls outside it: "25%" matches at "25" and the "%" is left behind, and a
-	quote opening "(+) surcharge" starts at "surcharge". Comparing figures across that edge
-	would fail every honest quote. Widening by the quote's own lead/tail keeps the two sides
-	measuring the same neighbourhood.
-	# ponytail: the widening is as long as the quote's edge punctuation, so a quote that opens
-	# with a long punctuation run could pull a neighbouring figure into the window; tighten to
-	# a fixed few characters if a corpus ever produces one.
-	"""
 	quote_tokens = tokens_with_offsets(*normalise(quote))
 	if not quote_tokens:
 		return source[char_start:char_end]
@@ -205,16 +159,10 @@ def figure_window(quote: str, source: str, char_start: int, char_end: int) -> st
 
 
 def figures_agree(quote: str, source: str, char_start: int, char_end: int) -> bool:
-	"""Whether every figure in the quote survives, in order, in the span it matched.
-
-	This is the gate fuzzy similarity does not get a vote on. A quote is accepted only when
-	the prose is close enough AND the figures are identical — never on prose alone.
-	"""
 	return get_figures(quote) == get_figures(figure_window(quote, source, char_start, char_end))
 
 
 def get_shingles(tokens: list[str], size: int = SHINGLE_SIZE) -> set[tuple[str, ...]]:
-	"""Overlapping token n-grams. A run shorter than `size` contributes itself, whole."""
 	if not tokens:
 		return set()
 	if len(tokens) < size:
@@ -223,7 +171,6 @@ def get_shingles(tokens: list[str], size: int = SHINGLE_SIZE) -> set[tuple[str, 
 
 
 def get_source_text(chunk_or_section) -> str:
-	"""The text to search: a plain string, or the body of a Chunk / Hit / Source row."""
 	if isinstance(chunk_or_section, str):
 		return chunk_or_section
 	if isinstance(chunk_or_section, dict):
@@ -241,7 +188,6 @@ def get_source_text(chunk_or_section) -> str:
 
 
 def format_span(source: str, char_start: int, char_end: int, score: float) -> dict:
-	"""A located span, with 1-based line numbers counted in the ORIGINAL source."""
 	return {
 		"found": True,
 		"reason": None,
@@ -257,11 +203,6 @@ def format_span(source: str, char_start: int, char_end: int, score: float) -> di
 def best_token_window(
 	quote_tokens: list[str], source_tokens: list[tuple[str, int, int]]
 ) -> tuple[int, int, float] | None:
-	"""Closest run of `source_tokens` to `quote_tokens` — (first token, last token, ratio).
-
-	Anchored on the *rarest* quote token so the number of windows we score stays small even
-	when the quote opens with "the".
-	"""
 	if not quote_tokens or not source_tokens:
 		return None
 	words = [token for token, _, _ in source_tokens]
@@ -287,12 +228,6 @@ def best_token_window(
 
 
 def locate_quote(quote: str, chunk_or_section) -> dict:
-	"""Where `quote` sits inside its source: `found` plus exact line and character span.
-
-	Exact (normalised) containment wins outright; otherwise the closest token window is
-	accepted only above `MIN_QUOTE_SCORE`. A miss still reports the best score it saw, so a
-	near-threshold failure is debuggable rather than a bare False.
-	"""
 	source = get_source_text(chunk_or_section)
 	normalised_quote, quote_offsets = normalise(quote or "")
 	normalised_source, source_offsets = normalise(source)
@@ -318,16 +253,12 @@ def locate_quote(quote: str, chunk_or_section) -> dict:
 		return {**NOT_LOCATED, "score": round(float(score), 4)}
 
 	span = format_span(source, source_tokens[first][1], source_tokens[last][2], score)
-	# Both gates, or nothing. Prose similarity got the quote to the right sentence; it does
-	# not get to certify the numbers in it.
 	if not figures_agree(quote, source, span["char_start"], span["char_end"]):
 		return {**NOT_LOCATED, "score": span["score"], "reason": FIGURES_DIFFER}
 	return span
 
 
 def build_page_index(pages: list[dict]) -> list[tuple[int, set[tuple[str, ...]], str]]:
-	"""Tokenise each page once — (page number, shingles, token run) — so a whole section's
-	chunks are scored against it without re-tokenising the page per chunk."""
 	index = []
 	for page in pages:
 		tokens = get_tokens(page.get("canonical_markdown") or "")
@@ -336,12 +267,6 @@ def build_page_index(pages: list[dict]) -> list[tuple[int, set[tuple[str, ...]],
 
 
 def page_scores(tokens: list[str], page_index: list[tuple[int, set, str]]) -> list[tuple[float, int]]:
-	"""How much of `tokens` each page carries, as (score, page number).
-
-	Long text is scored by shingle overlap. Text too short to shingle — a one-line quote out
-	of a rate table — is scored by whether its token run occurs on the page at all, which
-	answers on a page that has it and abstains (via the tie rule) when several pages do.
-	"""
 	if len(tokens) >= SHINGLE_SIZE:
 		wanted = get_shingles(tokens)
 		return [(len(wanted & shingles) / len(wanted), page_no) for page_no, shingles, _ in page_index]
@@ -350,11 +275,6 @@ def page_scores(tokens: list[str], page_index: list[tuple[int, set, str]]) -> li
 
 
 def resolve_page(text: str, page_index: list[tuple[int, set, str]], fallback_page: int = 0) -> dict:
-	"""The one page `text` came from, or the fallback marked approximate.
-
-	Approximate is not a failure mode to hide — a citation that says "somewhere in pages
-	10-12" is honest, and a citation that says "page 11" when it does not know is not.
-	"""
 	tokens = get_tokens(text)
 	if not tokens or not page_index:
 		return {"page_no": fallback_page, "page_approximate": True, "page_score": 0.0}
@@ -368,11 +288,6 @@ def resolve_page(text: str, page_index: list[tuple[int, set, str]], fallback_pag
 
 
 def get_rows_by_name(doctype: str, names: list[str], fields: list[str]) -> list[dict]:
-	"""`get_all` over a name list, sliced into batches — one query per batch, no N+1.
-
-	Lives here rather than next to either caller because `chunk` imports this module, so
-	this is the lowest point in the retrieval stack both sides can reach.
-	"""
 	unique = [name for name in dict.fromkeys(names) if name]
 	rows: list[dict] = []
 	for start in range(0, len(unique), BATCH_SIZE):
@@ -387,12 +302,6 @@ def get_rows_by_name(doctype: str, names: list[str], fields: list[str]) -> list[
 def get_pages_by_document(
 	document_names: list[str], page_numbers: list[int] | None = None
 ) -> dict[str, list[dict]]:
-	"""Source Pages for the given documents, grouped — one query per batch, never per row.
-
-	`page_numbers` narrows the scan to the pages the caller will actually read; omit it for
-	every page of each document. An empty page list is a real answer ("no pages wanted"),
-	so it returns nothing rather than falling through to the whole document.
-	"""
 	documents = [name for name in dict.fromkeys(document_names) if name]
 	numbers = None if page_numbers is None else sorted({number for number in page_numbers if number})
 	if not documents or numbers == []:
@@ -409,11 +318,6 @@ def get_pages_by_document(
 
 
 def page_line_span(text: str, pages: list[dict], page_no: int) -> tuple[int, int]:
-	"""Where `text` sits on one page of a document, as (line start, line end).
-
-	(0, 0) when the page is not in `pages` or the text cannot be located on it — an
-	unresolved span is reported as unknown, never guessed.
-	"""
 	for page in pages:
 		if page["page_no"] != page_no:
 			continue
@@ -432,7 +336,6 @@ def page_range(citation: dict) -> list[int]:
 
 
 def check_quote(quote: str, citation: dict, pages_by_document: dict[str, list[dict]]) -> dict:
-	"""Locate `quote` in the cited source and resolve it down to a page and a page line."""
 	located = locate_quote(quote, citation)
 	result = {
 		"status": "verified" if located["found"] else "unverified",
@@ -466,13 +369,6 @@ def check_quote(quote: str, citation: dict, pages_by_document: dict[str, list[di
 
 
 def verify_citations(answer_markdown: str, citations: list[dict]) -> dict:
-	"""Check every quote the model produced against the source it attributed it to.
-
-	Two populations are checked and reported separately: the `quote` a citation carries, and
-	any quoted span written inline in the answer immediately before a `[n]` marker. A marker
-	pointing past the end of the citation list is itself an unverified quote — a fabricated
-	source is the same failure as a fabricated sentence.
-	"""
 	citations = citations or []
 	pages_by_document = get_pages_by_document(
 		[citation.get("source_document") for citation in citations],
@@ -526,14 +422,6 @@ def verify_citations(answer_markdown: str, citations: list[dict]) -> dict:
 
 
 def attach_verified_quotes(answer_markdown: str, citations: list[dict]) -> list[dict]:
-	"""Citations with their supporting quote located, verified, and pinned to a page + line.
-
-	The single call the synthesis path needs. Every returned citation carries `quote`,
-	`quote_status` (`verified` / `unverified` / `unquoted`) and the resolved `page_no` /
-	`page_approximate` / line span. A citation whose quote could not be located keeps the
-	quote AND the `unverified` status — it is the UI's job to show it as unconfirmed, and it
-	cannot do that if we drop the evidence of the miss.
-	"""
 	report = verify_citations(answer_markdown, citations)
 	best_inline: dict[int, dict] = {}
 	for row in report["quotes"]:

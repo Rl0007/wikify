@@ -576,7 +576,11 @@ class TestAskCost(FrappeTestCase):
 			"prompt_tokens": 1000,
 			"completion_tokens": 310,
 		}
+		# The cache is keyed only on inputs this test holds fixed, so a previous run's entry
+		# would be replayed and this would assert the router's price instead of the answer's.
 		with (
+			patch.object(api_rag.answer_cache, "get", return_value=None),
+			patch.object(api_rag.answer_cache, "set"),
 			patch.object(rag_answer, "answer", return_value=dict(answered)),
 			patch.object(frappe, "publish_realtime") as publish,
 		):

@@ -1,22 +1,3 @@
-"""Keep sections and the retrieval index in step with edits upstream of them.
-
-The content chain is `Source Page.canonical_markdown` → `Source Section.markdown` →
-chunks → index, and every link is a **copy**, so a fix that stops at one link leaves the
-ones after it serving the old text. Two handlers close it:
-
-- `queue_reindex` (`Source Section`) — a section edit makes the project's index stale.
-- `queue_page_propagation` (`Source Page`) — a page fix makes every section built from
-  that page stale, and therefore the index too. Without it a re-remediated page is
-  correct in Page Review while a corrupted copy of the same table keeps being retrieved,
-  until somebody re-sections the whole document by hand.
-
-Both coalesce, because a bulk pass writes hundreds of rows in one transaction and one job
-per row would bury the long queue: the first change marks a pending key and enqueues one
-job, further changes while that job is queued enqueue nothing. Each job clears its marker
-*before* it starts work, so a change landing mid-run queues the next pass and is never
-lost (the failure mode is one redundant pass, never stale content).
-"""
-
 from __future__ import annotations
 
 from contextlib import contextmanager
@@ -24,23 +5,19 @@ from contextlib import contextmanager
 import frappe
 from frappe.utils.data import cint
 
-# Safety net only — the job clears its own marker; this stops a crashed worker from
-# wedging a project's index permanently.
+# Safety net only — the job clears its own marker; this stops a crashed worker from wedging
+# a project's index permanently.
 PENDING_TTL_SECONDS = 1800
 
-# Redis hash accumulating the pages whose canonical markdown changed since the last
-# propagation pass, keyed `<source_document>:<page_no>`. A set, not a counter, so a page
-# saved ten times costs one rebuild.
 DIRTY_PAGES_HASH = "wikify_rag_dirty_pages"
 
 # Past this many sections in one pass, one project rebuild beats a scoped `upsert_sections`:
-# the batch still re-embeds every section it touches, so at some width re-embedding the whole
+# the batch re-embeds every section it touches anyway, so at some width re-embedding the whole
 # project costs the same and leaves the index consistent in one commit instead of two.
-PROJECT_REBUILD_FANOUT = 10
-
 # ponytail: coalescing rebuilds the WHOLE project, so a one-word title fix re-embeds every
-# chunk in it; switch to per-section `upsert_section` (keyed by a per-section marker) once
-# a project's rebuild stops fitting comfortably in the long queue's timeout.
+# chunk in it; switch to per-section `upsert_section` once a rebuild stops fitting in the
+# long queue's timeout.
+PROJECT_REBUILD_FANOUT = 10
 
 
 def pending_key(project: str) -> str:
@@ -52,18 +29,13 @@ def page_propagation_key(source_document: str) -> str:
 
 
 def pass_already_queued(key: str) -> bool:
-	"""Is a job holding this marker right now?
-
-	`cache.get_value` answers from `frappe.local.cache` once it has read a key, so a writer
-	that set the marker keeps reading its own stale "1" long after the worker cleared it —
-	and then coalesces every later change into a job that already finished. `exists` is the
-	only read here that goes to redis, which is where the worker actually clears it.
-	"""
+	# `cache.get_value` answers from `frappe.local.cache` once it has read a key, so a writer
+	# that set the marker keeps reading its own stale "1" long after the worker cleared it.
+	# `exists` is the only read here that goes to redis, which is where the worker clears it.
 	return bool(frappe.cache().exists(key))
 
 
 def indexing_suspended() -> bool:
-	"""Bulk/system contexts index once at the end, not row by row."""
 	flags = frappe.flags
 	return bool(
 		flags.get("wikify_skip_reindex")
@@ -76,19 +48,15 @@ def indexing_suspended() -> bool:
 
 
 def queue_reindex(doc, method: str | None = None) -> None:
-	"""`Source Section` doc_event handler — coalesce a project rebuild onto the long queue."""
 	if indexing_suspended():
 		return
 	project = frappe.db.get_value("Source Document", doc.source_document, "project")
-	# A document outside any project has nothing to scope an index to; it becomes
-	# searchable when it is assigned to one (which reindexes then).
 	if not project:
 		return
 	queue_project_rebuild(project)
 
 
 def queue_project_rebuild(project: str) -> None:
-	"""Mark the project pending and enqueue one rebuild; a no-op while one is already queued."""
 	key = pending_key(project)
 	if pass_already_queued(key):
 		return
@@ -103,7 +71,6 @@ def queue_project_rebuild(project: str) -> None:
 
 
 def rebuild_pending_project(project: str) -> None:
-	"""Clear the pending marker, then rebuild — edits during the run queue the next pass."""
 	from wikify.rag.index import rebuild_project
 
 	frappe.cache().delete_value(pending_key(project))
@@ -112,13 +79,6 @@ def rebuild_pending_project(project: str) -> None:
 
 
 def section_content_changed(section_names: list[str]) -> None:
-	"""Reindex sections written through `engine.store`, which fires no doc_event.
-
-	`set_section_markdown` and the tree APIs write with `frappe.db.set_value`, so the
-	`Source Section` reindex hook never sees them — the same hole `page_content_changed`
-	closes one link further up the chain. Without this an agent or UI edit changes exactly
-	the text the index serves and the index keeps serving the old copy.
-	"""
 	if indexing_suspended() or not section_names:
 		return
 
@@ -147,13 +107,6 @@ def section_content_changed(section_names: list[str]) -> None:
 
 
 def document_structure_changed(source_document: str) -> None:
-	"""A tree rebuild moved `hierarchy_path` under an unknown number of sections.
-
-	`hierarchy_path` is embedded into every chunk as its contextual-retrieval prefix, so a
-	rename or a reparent invalidates the whole document rather than the row that was edited.
-	Scoped to the project because that is what the index is scoped to, and coalesced, so a
-	drag that fires several rebuilds still costs one pass.
-	"""
 	if indexing_suspended() or not source_document:
 		return
 	project = frappe.db.get_value("Source Document", source_document, "project")
@@ -162,37 +115,20 @@ def document_structure_changed(source_document: str) -> None:
 
 
 def page_content_changed(page_name: str) -> None:
-	"""Mark a page's downstream sections stale — called from `engine.store`, the write funnel.
-
-	This was a `Source Page.on_update` doc_event until 0.7, which meant it almost never
-	ran: every real write to `canonical_markdown` goes through `store.set_canonical` or
-	`store.set_canonical_markdown`, and those use `frappe.db.set_value`, which fires no
-	doc_event at all. The hook only ever saw the handful of ORM saves in the tests that
-	covered it. Hanging invalidation off the funnel that actually performs the write is
-	the same reasoning `reindex_sections` already applies to `Source Section`.
-	"""
+	# This was a `Source Page.on_update` doc_event until 0.7 and therefore almost never ran:
+	# every real write to `canonical_markdown` goes through `store.set_canonical*`, which use
+	# `frappe.db.set_value` and fire no doc_event. Only the ORM saves in the tests saw it.
 	if indexing_suspended():
 		return
 	page = frappe.db.get_value("Source Page", page_name, ["source_document", "page_no"], as_dict=True)
-	# A page with no document has no section tree above it to invalidate.
 	if not page or not page.source_document:
 		return
 	mark_pages_dirty(page.source_document, [cint(page.page_no)])
-	# The pass reads the page back from the database, so it must not start before the
-	# write that triggered it is committed.
 	queue_page_propagation_pass(page.source_document, after_commit=True)
 
 
 @contextmanager
 def suspended_indexing():
-	"""Hold off per-page invalidation for a bulk pass that rebuilds the tree itself.
-
-	`remediate_pdf` and `finalize_document` write every page and then call
-	`rebuild_and_classify`, which replaces the whole tree and queues one project rebuild.
-	Invalidating page by page inside them would queue a second, redundant pass over work
-	that is about to be thrown away. Restored rather than cleared, so an outer bulk
-	context keeps its own suspension.
-	"""
 	was_suspended = frappe.flags.wikify_skip_reindex
 	frappe.flags.wikify_skip_reindex = True
 	try:
@@ -202,15 +138,12 @@ def suspended_indexing():
 
 
 def mark_pages_dirty(source_document: str, pages: list[int]) -> None:
-	"""One hash field per page, so two writers marking different pages can't clobber each
-	other the way a read-modify-write of a per-document list would."""
 	cache = frappe.cache()
 	for page_no in pages:
 		cache.hset(DIRTY_PAGES_HASH, f"{source_document}:{page_no}", 1)
 
 
 def dirty_page_fields(source_document: str) -> list[str]:
-	"""The hash fields waiting to be propagated for one document (peek, no claim)."""
 	prefix = f"{source_document}:"
 	fields = [
 		field.decode() if isinstance(field, bytes) else field
@@ -220,7 +153,6 @@ def dirty_page_fields(source_document: str) -> list[str]:
 
 
 def take_dirty_pages(source_document: str) -> list[int]:
-	"""Claim (read and clear) the page numbers accumulated for one document."""
 	claimed = dirty_page_fields(source_document)
 	if claimed:
 		frappe.cache().hdel(DIRTY_PAGES_HASH, claimed)
@@ -228,11 +160,6 @@ def take_dirty_pages(source_document: str) -> list[int]:
 
 
 def queue_page_propagation_pass(source_document: str, after_commit: bool = False) -> None:
-	"""Mark the document pending and enqueue one pass; a no-op while one is already queued.
-
-	`after_commit` for the doc_event path only: the pass reads the page back from the
-	database, so it must not start before the write that triggered it is committed.
-	"""
 	key = page_propagation_key(source_document)
 	if pass_already_queued(key):
 		return
@@ -247,21 +174,11 @@ def queue_page_propagation_pass(source_document: str, after_commit: bool = False
 
 
 def requeue_page_propagation(source_document: str, pages: list[int]) -> None:
-	"""Hand a half-finished propagation pass back to the queue (mirrors `index.requeue_rebuild`).
-
-	The markdown rebuild and the re-index are separate commits, so a worker dying between
-	them leaves a section holding the new text while the index still serves chunks of the
-	old — a mismatch nothing else would ever notice. Re-arming the claimed pages together
-	with the marker keeps the invariant "marker set means a pass is queued".
-	# ponytail: no backoff and no attempt cap, mirroring `index.requeue_rebuild`; add a
-	# retry counter if a propagation ever fails for a non-transient reason.
-	"""
 	mark_pages_dirty(source_document, pages)
 	queue_page_propagation_pass(source_document)
 
 
 def propagate_dirty_pages(source_document: str) -> None:
-	"""Claim the pages changed since the last pass and propagate them (the queued entry point)."""
 	frappe.cache().delete_value(page_propagation_key(source_document))
 	pages = take_dirty_pages(source_document)
 	if not pages:
@@ -269,21 +186,13 @@ def propagate_dirty_pages(source_document: str) -> None:
 	try:
 		propagate_pages(source_document, pages)
 	finally:
-		# A writer that marked pages dirty while this pass was already queued deliberately
-		# enqueued nothing — it relies on this pass to pick them up. If it lost the race
-		# against the claim above, its pages sit in the hash with no job behind them and go
-		# stale forever (observed on a 30-page bulk write). Re-arm instead of stranding them.
 		if dirty_page_fields(source_document):
 			queue_page_propagation_pass(source_document)
 
 
 def propagate_pages(source_document: str, pages: list[int]) -> None:
-	"""Rebuild the sections covering `pages`, then push them into the index."""
 	from wikify.engine.sectionize import rebuild_section_markdown, sections_covering_page
 
-	# ponytail: one covering-section query per dirty page — fine for the handful an edit or a
-	# page-scoped re-parse touches; batch into a single range query if one pass ever carries
-	# a whole document's worth of pages.
 	section_names = []
 	for page_no in pages:
 		for section in sections_covering_page(source_document, page_no):
@@ -304,16 +213,8 @@ def propagate_pages(source_document: str, pages: list[int]) -> None:
 
 
 def reindex_sections(project: str | None, section_names: list[str]) -> None:
-	"""Push rebuilt sections into the retrieval index.
-
-	`rebuild_section_markdown` writes through `frappe.db.set_value`, which fires no
-	doc_event — the `Source Section` reindex hook never sees it, so the index has to be
-	told here explicitly.
-	"""
 	from wikify.rag import index
 
-	# A document outside any project has nothing to scope an index to; it becomes
-	# searchable when it is assigned to one (which reindexes then).
 	if not project:
 		return
 	if len(section_names) > PROJECT_REBUILD_FANOUT:
