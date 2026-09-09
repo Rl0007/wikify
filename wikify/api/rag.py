@@ -94,6 +94,12 @@ def ask(
 
 	history = session_history(session)
 	readable = readable_projects()
+	# Routing is an LLM call, and it runs before retrieval can decide there is nothing to
+	# retrieve. `assert_readable` above cannot cover this: an unscoped ask has no project to
+	# check, so without this a user who may read no wiki at all still spends a classifier
+	# call — and a session row — on every question, only to be refused for want of hits.
+	if not project and not readable:
+		frappe.throw(_("You do not have access to any wiki."), frappe.PermissionError)
 	rerank_enabled = sbool(rerank)
 
 	with rag_usage.collect() as spend:
