@@ -101,7 +101,7 @@ def search(
 	}
 
 
-@frappe.whitelist()
+@frappe.whitelist(methods=["POST"])
 def ask(
 	question: str,
 	project: str | None = None,
@@ -261,7 +261,7 @@ def is_stale(projects: list[str], indexed_at) -> bool:
 	return bool(frappe.get_all("Source Section", filters=filters, limit=1, pluck="name"))
 
 
-@frappe.whitelist()
+@frappe.whitelist(methods=["POST"])
 def reindex(project: str) -> dict:
 	"""Rebuild a project's index in the background (embedding the corpus is slow)."""
 	if not frappe.has_permission("Wikify Project", ptype="write", doc=project):
@@ -276,7 +276,7 @@ def reindex(project: str) -> dict:
 	return {"job": job.id}
 
 
-@frappe.whitelist()
+@frappe.whitelist(methods=["POST"])
 def compare(query: str, project: str | None = None) -> dict:
 	"""The demo punchline: naive top-k vector search beside the routed strategy.
 

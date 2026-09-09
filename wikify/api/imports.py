@@ -29,7 +29,7 @@ def _create_import(pdf_file_url: str, title: str, project: str) -> str:
 	return imp.name
 
 
-@frappe.whitelist()
+@frappe.whitelist(methods=["POST"])
 def start_import(pdf_file_url: str, title: str, project: str | None = None) -> str:
 	"""Create a Wikify Import for an uploaded PDF and enqueue the parse job.
 
@@ -39,7 +39,7 @@ def start_import(pdf_file_url: str, title: str, project: str | None = None) -> s
 	return _create_import(pdf_file_url, title, project or seed_uncategorized_project())
 
 
-@frappe.whitelist()
+@frappe.whitelist(methods=["POST"])
 def start_imports(files: list[dict] | str, project: str | None = None) -> list[str]:
 	"""Batch sibling of `start_import` — one Import per uploaded PDF, one project.
 
@@ -62,7 +62,7 @@ def start_imports(files: list[dict] | str, project: str | None = None) -> list[s
 	return [_create_import(f["file_url"], f.get("title"), project) for f in files]
 
 
-@frappe.whitelist()
+@frappe.whitelist(methods=["POST"])
 def trigger_remediation(import_name: str, scope: str = "flagged") -> str:
 	"""Enqueue the remediation pass over an imported doc's pages.
 
@@ -89,7 +89,7 @@ def trigger_remediation(import_name: str, scope: str = "flagged") -> str:
 	return import_name
 
 
-@frappe.whitelist()
+@frappe.whitelist(methods=["POST"])
 def reclassify(import_name: str) -> str:
 	"""Re-tag the doc's Source Sections after manual tree edits.
 
@@ -129,7 +129,7 @@ def preview_wiki(import_name: str) -> dict:
 	return preview
 
 
-@frappe.whitelist()
+@frappe.whitelist(methods=["POST"])
 def generate_wiki(
 	import_name: str,
 	wiki_space: str | None = None,

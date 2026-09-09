@@ -12,7 +12,7 @@ import frappe
 from wikify.seed import seed_uncategorized_project
 
 
-@frappe.whitelist()
+@frappe.whitelist(methods=["POST"])
 def create_project(project_name: str, description: str = "") -> str:
 	"""Create a Wikify Project and return its name."""
 	project_name = (project_name or "").strip()
@@ -25,7 +25,7 @@ def create_project(project_name: str, description: str = "") -> str:
 	return proj.name
 
 
-@frappe.whitelist()
+@frappe.whitelist(methods=["POST"])
 def update_project(
 	name: str,
 	project_name: str | None = None,
