@@ -1,3 +1,5 @@
+# Copyright (c) 2026, BWH and contributors
+# For license information, please see license.txt
 import tempfile
 from pathlib import Path
 from unittest.mock import patch

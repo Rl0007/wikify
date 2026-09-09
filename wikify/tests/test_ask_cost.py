@@ -1,3 +1,5 @@
+# Copyright (c) 2026, BWH and contributors
+# For license information, please see license.txt
 import threading
 import time
 
