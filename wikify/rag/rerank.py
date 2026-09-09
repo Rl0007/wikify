@@ -23,6 +23,9 @@ import threading
 import numpy as np
 
 MODEL_REPO = "cross-encoder/ms-marco-MiniLM-L6-v2"
+# Pinned for the same reason as `embed.MODEL_REVISION`: the 0-10 map below and
+# `answer.MIN_RERANK_SCORE` are calibrated against the logits THESE weights produce.
+MODEL_REVISION = "233902d25c440f23af6f7d6e94d2946bac0bee0a"
 MODEL_FILE = "onnx/model.onnx"
 TOKENIZER_FILE = "tokenizer.json"
 # Tokens of the query+candidate pair the encoder reads. Latency is linear in this and it is
@@ -61,13 +64,16 @@ def get_model(repo: str = MODEL_REPO):
 				from huggingface_hub import hf_hub_download
 				from tokenizers import Tokenizer
 
-				tokenizer = Tokenizer.from_file(hf_hub_download(repo, TOKENIZER_FILE))
+				tokenizer = Tokenizer.from_file(
+					hf_hub_download(repo, TOKENIZER_FILE, revision=MODEL_REVISION)
+				)
 				# `only_second` truncates the candidate and never the question: a question cut
 				# in half is scored against nothing.
 				tokenizer.enable_truncation(max_length=MAX_TOKENS, strategy="only_second")
 				# Padding is done per batch below, not per list, so it stays off here.
 				tokenizer.no_padding()
-				session = onnxruntime.InferenceSession(hf_hub_download(repo, MODEL_FILE))
+				weights = hf_hub_download(repo, MODEL_FILE, revision=MODEL_REVISION)
+				session = onnxruntime.InferenceSession(weights)
 				_models[repo] = (tokenizer, session, {value.name for value in session.get_inputs()})
 	return _models[repo]
 

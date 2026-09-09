@@ -96,6 +96,10 @@ add_to_apps_screen = [
 # before_install = "wikify.install.before_install"
 after_install = "wikify.install.after_install"
 
+# Fetch the retrieval models on deploy rather than inside the first question — see
+# `rag.warm` for what that costs on the web worker.
+after_migrate = ["wikify.rag.warm.warm_models"]
+
 # Uninstallation
 # ------------
 

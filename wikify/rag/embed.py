@@ -9,7 +9,13 @@ from __future__ import annotations
 
 import threading
 
+import frappe
+
 MODEL_NAME = "minishlab/potion-base-8M"
+# Pinned to the weights every eval number and every calibrated floor in `rag.answer` was
+# measured against. An unpinned repo can serve different vectors tomorrow and nothing
+# downstream would notice: the scores would simply move.
+MODEL_REVISION = "bf8b056651a2c21b8d2565580b8569da283cab23"
 EMBED_DIM: int = 256
 
 _model = None
@@ -21,16 +27,39 @@ def get_model():
 
 	Double-checked locking so two gunicorn threads racing on the first search don't both
 	pay the load (and don't both hit the HF cache concurrently).
+
+	The snapshot is resolved here and handed over as a local path because model2vec's
+	`from_pretrained` takes no `revision` and defaults to `force_download=True` — it would
+	re-fetch the weights on every cold start and accept whatever the repo serves that day.
 	"""
 	global _model
 
 	if _model is None:
 		with _model_lock:
 			if _model is None:
-				from model2vec import StaticModel
-
-				_model = StaticModel.from_pretrained(MODEL_NAME)
+				_model = load_model()
 	return _model
+
+
+def load_model():
+	"""Load the pinned snapshot, or say plainly why retrieval cannot run.
+
+	Every mode except `filter` embeds the query, so there is nothing to degrade to here —
+	but an offline bench must fail with the command that fixes it rather than an HTTP
+	traceback out of the hub client.
+	"""
+	from huggingface_hub import snapshot_download
+	from model2vec import StaticModel
+
+	try:
+		return StaticModel.from_pretrained(snapshot_download(MODEL_NAME, revision=MODEL_REVISION))
+	except Exception:
+		frappe.log_error(title="wikify: embedding model unavailable")
+		frappe.throw(
+			f"The embedding model ({MODEL_NAME}) is not available on this bench. "
+			"Run `bench --site <site> execute wikify.rag.warm.warm_models` on a host with "
+			"network access, or re-run migrate."
+		)
 
 
 def embed(texts: list[str]) -> list[list[float]]:
