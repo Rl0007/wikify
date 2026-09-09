@@ -19,7 +19,9 @@ import frappe
 from frappe import _
 from frappe.utils.data import cint, sbool
 
+from wikify.agent import llm as agent_llm
 from wikify.rag import answer as rag_answer
+from wikify.rag import answer_cache
 from wikify.rag import history as rag_history
 from wikify.rag import index as rag_index
 from wikify.rag import search as rag_search
@@ -120,6 +122,11 @@ def ask(
 	answer deltas, then `done` — which carries what the turn cost, so the price can be
 	shown the moment the answer finishes. The same payload is also returned, so a caller
 	that isn't listening still gets the whole answer.
+
+	A repeat of the same question is served from `answer_cache` and publishes the identical
+	sequence, with `cached: True` and zero spend. The cache is exact-match and keyed on the
+	store's write counter, so it cannot outlive the corpus it answered from — see that
+	module for why it is not keyed by similarity.
 	"""
 	question = (question or "").strip()
 	if not question:
@@ -132,16 +139,37 @@ def ask(
 	def publish(payload: dict) -> None:
 		frappe.publish_realtime(STREAM_EVENT, {"stream": stream, **payload}, user=user)
 
-	result = rag_answer.answer(
-		question,
-		project=project,
-		history=session_history(session),
-		rerank=sbool(rerank),
-		allowed_projects=readable_projects(),
-		on_route=lambda route: publish({"route": route}),
-		on_citations=lambda citations: publish({"citations": citations}),
-		on_delta=lambda delta: publish({"delta": delta}),
+	history = session_history(session)
+	readable = readable_projects()
+	rerank_enabled = sbool(rerank)
+	key = answer_cache.cache_key(
+		question, project, history, rerank_enabled, readable, agent_llm.resolve_model(project=project)
 	)
+
+	cached = answer_cache.get(key)
+	if cached:
+		result = replay_cached_answer(cached, publish)
+	else:
+		result = rag_answer.answer(
+			question,
+			project=project,
+			history=history,
+			rerank=rerank_enabled,
+			allowed_projects=readable,
+			on_route=lambda route: publish({"route": route}),
+			on_citations=lambda citations: publish({"citations": citations}),
+			on_delta=lambda delta: publish({"delta": delta}),
+		)
+		# Stored before `took_ms` and `cached` land, so a replay is never billed the
+		# original's clock and never reports itself as the run that paid for the answer.
+		# A refusal is never stored: it can be produced by a transient failure — a missing
+		# key, a reranker returning a flat verdict — rather than by a fact about the
+		# corpus, and a cached one would keep answering "I couldn't find this" for a day
+		# after the cause was fixed. It is also the cheap path, so re-running costs little.
+		if not result["refused"]:
+			answer_cache.set(key, result)
+		result["cached"] = False
+
 	result["took_ms"] = int((time.monotonic() - started) * 1000)
 	publish(
 		{
@@ -152,6 +180,7 @@ def ask(
 			"prompt_tokens": result["prompt_tokens"],
 			"completion_tokens": result["completion_tokens"],
 			"model": result["model"],
+			"cached": result["cached"],
 		}
 	)
 	# The log is the product's own eval set: route decisions and citations are what let us
@@ -169,6 +198,31 @@ def ask(
 	except Exception:
 		frappe.log_error(title="Wikify: could not record the ask turn")
 	return result
+
+
+def replay_cached_answer(cached: dict, publish) -> dict:
+	"""Re-emit a cached answer over realtime in the order a live one arrives.
+
+	The interface reads the stream, not the return value, so a cache hit has to publish the
+	same three payloads or the page shows nothing until `done`. The answer goes out as one
+	delta rather than re-chunked: there is no generation to pace, and faking a token stream
+	would spend the very wall clock the cache exists to remove.
+
+	Spend is zeroed rather than replayed. This turn made no completion, so reporting the
+	original's cost would overstate what the corpus is costing to run; `cached` is what
+	tells the caller why the price is nothing.
+	"""
+	publish({"route": cached.get("route")})
+	publish({"citations": cached.get("citations") or []})
+	if cached.get("answer"):
+		publish({"delta": cached["answer"]})
+	return {
+		**cached,
+		"cost": 0.0,
+		"prompt_tokens": 0,
+		"completion_tokens": 0,
+		"cached": True,
+	}
 
 
 def session_history(session: str | None) -> list[dict]:
