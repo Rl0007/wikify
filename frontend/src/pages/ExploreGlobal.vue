@@ -163,13 +163,13 @@ function pageRange(s) {
 							<div
 								v-for="s in g.sections"
 								:key="s.name"
-								class="flex items-center gap-3 border-b border-outline-gray-1 px-4 py-2 last:border-b-0"
+								class="flex items-start gap-3 border-b border-outline-gray-1 px-4 py-2 last:border-b-0"
 							>
 								<div class="min-w-0 flex-1">
-									<p class="truncate text-base text-ink-gray-8">{{ s.title }}</p>
-									<p class="truncate text-xs text-ink-gray-5">
-										{{ s.hierarchy_path }}
+									<p class="text-base break-words text-ink-gray-8">
+										{{ s.hierarchy_path || s.title }}
 									</p>
+									<p class="truncate text-xs text-ink-gray-5">{{ s.title }}</p>
 								</div>
 								<Badge
 									v-if="pageRange(s)"

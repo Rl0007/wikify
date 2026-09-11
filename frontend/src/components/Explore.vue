@@ -147,17 +147,19 @@ function pageRange(s) {
 				v-if="sections.length"
 				class="flex items-center gap-3 border-b border-outline-gray-1 px-4 py-2 text-sm text-ink-gray-5"
 			>
-				<span class="flex-1">Section ({{ sections.length }})</span>
+				<span class="flex-1">Route ({{ sections.length }})</span>
 				<span class="w-20 shrink-0 text-right">Pages</span>
 			</div>
 			<div
 				v-for="s in sections"
 				:key="s.name"
-				class="flex items-center gap-3 border-b border-outline-gray-1 px-4 py-2.5 last:border-b-0"
+				class="flex items-start gap-3 border-b border-outline-gray-1 px-4 py-2.5 last:border-b-0"
 			>
 				<div class="min-w-0 flex-1">
-					<p class="truncate text-base text-ink-gray-8">{{ s.title }}</p>
-					<p class="truncate text-xs text-ink-gray-5">{{ s.hierarchy_path }}</p>
+					<p class="text-base break-words text-ink-gray-8">
+						{{ s.hierarchy_path || s.title }}
+					</p>
+					<p class="truncate text-xs text-ink-gray-5">{{ s.title }}</p>
 				</div>
 				<!-- The badge sizes to its text inside a fixed column, so it reads as a chip
 				     rather than an 80px pill with the range shoved to one end. -->
